@@ -23,7 +23,7 @@ class HikvisionSyncController extends Controller
      * }
      *
      * card_no optional dan default ke member_id.
-     * begin_time/end_time + face_image_base64/avatar_base64 tetap didukung untuk backward compatibility.
+     * face_image_base64/avatar_base64 tetap didukung untuk backward compatibility.
      */
     public function syncCustomerToGates(
         Request $request,
@@ -43,10 +43,8 @@ class HikvisionSyncController extends Controller
         return $request->validate([
             'member_id' => 'required|string',
             'name' => 'required|string',
-            'begin_time' => 'nullable|required_without:start_date|date',
-            'start_date' => 'nullable|required_without:begin_time|date',
-            'end_time' => 'nullable|required_without:end_date|date',
-            'end_date' => 'nullable|required_without:end_time|date',
+            'start_date' => 'required|date',
+            'end_date' => 'required|date',
             'card_no' => 'nullable|string',
             'face_image_base64' => 'nullable|string',
             'face_images_base64' => 'nullable|array',

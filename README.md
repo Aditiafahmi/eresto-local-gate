@@ -149,10 +149,8 @@ Supported fields:
 | --- | --- | --- |
 | `member_id` | yes | Customer/member identifier. Mapped to Hikvision `employeeNo`. |
 | `name` | yes | Customer name. |
-| `start_date` | conditional | Access start time. Required if `begin_time` is not sent. |
-| `end_date` | conditional | Access end time. Required if `end_time` is not sent. |
-| `begin_time` | conditional | Backward-compatible alias for `start_date`. |
-| `end_time` | conditional | Backward-compatible alias for `end_date`. |
+| `start_date` | yes | Customer access start time. |
+| `end_date` | yes | Customer access end time. |
 | `card_no` | no | Card credential number. Defaults to `member_id` if empty. |
 | `face_image_base64` | no | Single face image in Base64 format. |
 | `face_images_base64` | no | Multiple face images in Base64 format. Each image is uploaded separately. |

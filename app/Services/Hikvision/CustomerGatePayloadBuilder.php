@@ -11,8 +11,6 @@ class CustomerGatePayloadBuilder
 {
     public function build(array $customer): array
     {
-        $beginTime = $customer['begin_time'] ?? $customer['start_date'];
-        $endTime = $customer['end_time'] ?? $customer['end_date'];
         $cardNo = $customer['card_no'] ?? $customer['member_id'];
         $faceImagesBase64 = $this->faceImagesBase64($customer);
         $faceImageBase64 = $faceImagesBase64[0] ?? null;
@@ -22,8 +20,8 @@ class CustomerGatePayloadBuilder
             name: $customer['name'],
             userType: UserType::NORMAL,
             validEnabled: true,
-            beginTime: Carbon::parse($beginTime)->format('Y-m-d\TH:i:s'),
-            endTime: Carbon::parse($endTime)->format('Y-m-d\TH:i:s'),
+            beginTime: Carbon::parse($customer['start_date'])->format('Y-m-d\TH:i:s'),
+            endTime: Carbon::parse($customer['end_date'])->format('Y-m-d\TH:i:s'),
             doorRight: '1',
             rightPlan: [
                 ['doorNo' => 1, 'planTemplateNo' => '1'],

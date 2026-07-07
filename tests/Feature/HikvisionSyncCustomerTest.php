@@ -47,8 +47,8 @@ class HikvisionSyncCustomerTest extends TestCase
         $response = $this->postJson('/api/sync-customer', [
             'member_id' => 'M-1261-ABCD',
             'name' => 'Customer Test',
-            'begin_time' => '2026-07-07T00:00:00',
-            'end_time' => '2026-12-31T23:59:59',
+            'start_date' => '2026-07-07T00:00:00',
+            'end_date' => '2026-12-31T23:59:59',
         ]);
 
         $response->assertOk()

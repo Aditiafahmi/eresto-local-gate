@@ -1,66 +1,242 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Eresto Local Gate
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Local Laravel service for syncing Eresto/XGym customer access data to Hikvision gate devices.
 
-## About Laravel
+This service receives customer data from Eresto Cloud, builds Hikvision-compatible payloads, then sends:
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+- customer profile as `UserInfo`
+- card credential as `CardInfo`
+- optional face image data to Hikvision `FDLib`
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+## Main Flow
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+```text
+Eresto Cloud
+  -> POST /api/sync-customer
+  -> HikvisionSyncController
+  -> CustomerGatePayloadBuilder
+  -> CustomerGateSyncService
+  -> Hikvision gate devices
+```
 
-## Learning Laravel
+## Project Structure
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
+```text
+routes/api.php
+  API route definitions.
 
-You may also try the [Laravel Bootcamp](https://bootcamp.laravel.com), where you will be guided through building a modern Laravel application from scratch.
+app/Http/Controllers/Api/HikvisionSyncController.php
+  Receives and validates sync customer requests.
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+app/Services/Hikvision/CustomerGatePayloadBuilder.php
+  Builds Hikvision Person, Card, and face image payload data.
 
-## Laravel Sponsors
+app/Services/Hikvision/CustomerGateSyncService.php
+  Sends customer data to every configured Hikvision gate.
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+config/hikvision.php
+  Hikvision device configuration.
 
-### Premium Partners
+tests/Feature/HikvisionSyncCustomerTest.php
+  Mocked feature tests for the sync-customer endpoint.
+```
 
-- **[Vehikl](https://vehikl.com/)**
-- **[Tighten Co.](https://tighten.co)**
-- **[WebReinvent](https://webreinvent.com/)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel/)**
-- **[Cyber-Duck](https://cyber-duck.co.uk)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Jump24](https://jump24.co.uk)**
-- **[Redberry](https://redberry.international/laravel/)**
-- **[Active Logic](https://activelogic.com)**
-- **[byte5](https://byte5.de)**
-- **[OP.GG](https://op.gg)**
+## Requirements
 
-## Contributing
+- PHP 8.2+
+- Composer
+- Docker, if using Laravel Sail
+- Hikvision gate device with ISAPI enabled
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+## Setup
 
-## Code of Conduct
+Copy the environment file:
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+```bash
+cp .env.example .env
+```
 
-## Security Vulnerabilities
+Install dependencies:
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+```bash
+composer install
+```
 
-## License
+Generate app key:
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+```bash
+php artisan key:generate
+```
+
+If using Sail/Docker:
+
+```bash
+docker compose up -d
+```
+
+## Hikvision Configuration
+
+Configure Hikvision devices in `.env`:
+
+```env
+HIKVISION_DEFAULT_DEVICE=xgym_entrance
+HIKVISION_FORMAT=json
+HIKVISION_PROTOCOL=http
+HIKVISION_PORT=80
+HIKVISION_USERNAME=your-device-username
+HIKVISION_PASSWORD=your-device-password
+HIKVISION_TIMEOUT=30
+HIKVISION_VERIFY_SSL=false
+
+HIKVISION_XGYM_ENTRANCE_IP=your-entrance-gate-ip
+HIKVISION_XGYM_EXIT_IP=your-exit-gate-ip
+```
+
+Device list is defined in:
+
+```text
+config/hikvision.php
+```
+
+Current configured device keys:
+
+- `xgym_entrance`
+- `xgym_exit`
+
+## API Endpoint
+
+### Sync Customer To Gates
+
+```http
+POST /api/sync-customer
+Content-Type: application/json
+Accept: application/json
+```
+
+Example payload:
+
+```json
+{
+  "member_id": "M-1260-VJIV",
+  "name": "joookoo",
+  "start_date": "2026-07-07T00:00:00",
+  "end_date": "2026-12-31T23:59:59",
+  "card_no": "CARD-M-1260-VJIV",
+  "face_image_base64": "base64-image"
+}
+```
+
+Example payload with multiple face images:
+
+```json
+{
+  "member_id": "M-1260-VJIV",
+  "name": "joookoo",
+  "start_date": "2026-07-07T00:00:00",
+  "end_date": "2026-12-31T23:59:59",
+  "card_no": "CARD-M-1260-VJIV",
+  "face_images_base64": [
+    "base64-front",
+    "base64-left",
+    "base64-right"
+  ]
+}
+```
+
+Supported fields:
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `member_id` | yes | Customer/member identifier. Mapped to Hikvision `employeeNo`. |
+| `name` | yes | Customer name. |
+| `start_date` | conditional | Access start time. Required if `begin_time` is not sent. |
+| `end_date` | conditional | Access end time. Required if `end_time` is not sent. |
+| `begin_time` | conditional | Backward-compatible alias for `start_date`. |
+| `end_time` | conditional | Backward-compatible alias for `end_date`. |
+| `card_no` | no | Card credential number. Defaults to `member_id` if empty. |
+| `face_image_base64` | no | Single face image in Base64 format. |
+| `face_images_base64` | no | Multiple face images in Base64 format. Each image is uploaded separately. |
+| `avatar_base64` | no | Backward-compatible fallback for single face image. |
+
+Example response:
+
+```json
+{
+  "message": "Sync process completed",
+  "data": {
+    "xgym_entrance": {
+      "status": "success",
+      "message": "Person and card credential synced successfully",
+      "face_synced": true,
+      "face_image_count": 1
+    },
+    "xgym_exit": {
+      "status": "success",
+      "message": "Person and card credential synced successfully",
+      "face_synced": true,
+      "face_image_count": 1
+    }
+  }
+}
+```
+
+## Hikvision Endpoint Mapping
+
+The service sends data to Hikvision through the `shaykhnazar/hikvision-isapi` package.
+
+| Data | Hikvision ISAPI Endpoint |
+| --- | --- |
+| Customer/UserInfo | `POST /ISAPI/AccessControl/UserInfo/Record` |
+| CardInfo | `POST /ISAPI/AccessControl/CardInfo/Record` |
+| Face image | `POST /ISAPI/Intelligent/FDLib/1/picture` |
+
+Face data uses Hikvision FDLib `1` by default.
+
+## Face Image Notes
+
+For POS-based face enrollment, Eresto Cloud may send one or more Base64 face images.
+
+If `face_images_base64` contains multiple images, this service uploads each image to the same customer `employeeNo/member_id`. Hikvision stores and uses the face data inside the device-local FDLib.
+
+This service treats face enrollment as customer-level data, not image-level data. The important result is whether the customer has usable face data on the device.
+
+## Local Testing
+
+Run the mocked feature test:
+
+```bash
+php artisan test tests/Feature/HikvisionSyncCustomerTest.php
+```
+
+With Docker/Sail:
+
+```bash
+docker compose exec -T laravel.test php artisan test tests/Feature/HikvisionSyncCustomerTest.php
+```
+
+The test uses a fake Hikvision HTTP client, so it does not require a real gate device.
+
+## Manual Request Example
+
+```bash
+curl -X POST http://127.0.0.1/api/sync-customer \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json" \
+  -d '{
+    "member_id": "TEST-001",
+    "name": "Test Customer",
+    "start_date": "2026-07-07T00:00:00",
+    "end_date": "2026-12-31T23:59:59",
+    "card_no": "CARD-TEST-001",
+    "face_image_base64": "base64-image"
+  }'
+```
+
+This manual request will call real configured Hikvision devices. Use the feature test if you want to test without connecting to a gate.
+
+## Development Notes
+
+- Do not edit files inside `vendor/` for project behavior.
+- Keep controller logic thin. Put Hikvision payload building in `CustomerGatePayloadBuilder`.
+- Put device communication logic in `CustomerGateSyncService`.
+- Add tests when changing endpoint payload, card sync, or face sync behavior.

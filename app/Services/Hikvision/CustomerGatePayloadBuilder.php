@@ -13,13 +13,13 @@ class CustomerGatePayloadBuilder
     {
         $cardNo = $customer['card_no'] ?? $customer['member_id'];
         $faceImagesBase64 = $this->faceImagesBase64($customer);
-        $faceImageBase64 = $faceImagesBase64[0] ?? null;
+        $validEnabled = ($customer['status'] ?? 'active') === 'active';
 
         $person = new Person(
             employeeNo: $customer['member_id'],
             name: $customer['name'],
             userType: UserType::NORMAL,
-            validEnabled: true,
+            validEnabled: $validEnabled,
             beginTime: Carbon::parse($customer['start_date'])->format('Y-m-d\TH:i:s'),
             endTime: Carbon::parse($customer['end_date'])->format('Y-m-d\TH:i:s'),
             doorRight: '1',
@@ -37,43 +37,7 @@ class CustomerGatePayloadBuilder
         return [
             'person' => $person,
             'card' => $card,
-            'face_image_base64' => $faceImageBase64,
             'face_images_base64' => $faceImagesBase64,
-            'payloads' => [
-                'person' => $person->toArray(),
-                'card' => $card->toArray(),
-                'face' => $faceImageBase64 ? [
-                    'faceInfo' => [
-                        'employeeNo' => $person->employeeNo,
-                        'faceLibType' => 'blackFD',
-                    ],
-                    'faceData' => $faceImageBase64,
-                ] : null,
-                'face_samples' => array_map(
-                    fn (string $faceImage) => [
-                        'faceInfo' => [
-                            'employeeNo' => $person->employeeNo,
-                            'faceLibType' => 'blackFD',
-                        ],
-                        'faceData' => $faceImage,
-                    ],
-                    $faceImagesBase64
-                ),
-            ],
-            'endpoints' => [
-                'person' => [
-                    'method' => 'POST',
-                    'path' => '/ISAPI/AccessControl/UserInfo/Record',
-                ],
-                'card' => [
-                    'method' => 'POST',
-                    'path' => '/ISAPI/AccessControl/CardInfo/Record',
-                ],
-                'face' => [
-                    'method' => 'POST',
-                    'path' => '/ISAPI/Intelligent/FDLib/1/picture',
-                ],
-            ],
         ];
     }
 

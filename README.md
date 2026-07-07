@@ -121,6 +121,7 @@ Example payload:
   "name": "joookoo",
   "start_date": "2026-07-07T00:00:00",
   "end_date": "2026-12-31T23:59:59",
+  "status": "active",
   "card_no": "CARD-M-1260-VJIV",
   "face_image_base64": "base64-image"
 }
@@ -134,6 +135,7 @@ Example payload with multiple face images:
   "name": "joookoo",
   "start_date": "2026-07-07T00:00:00",
   "end_date": "2026-12-31T23:59:59",
+  "status": "active",
   "card_no": "CARD-M-1260-VJIV",
   "face_images_base64": [
     "base64-front",
@@ -151,6 +153,7 @@ Supported fields:
 | `name` | yes | Customer name. |
 | `start_date` | yes | Customer access start time. |
 | `end_date` | yes | Customer access end time. |
+| `status` | no | Customer access status. Supported values: `active`, `inactive`. Defaults to `active`. |
 | `card_no` | no | Card credential number. Defaults to `member_id` if empty. |
 | `face_image_base64` | no | Single face image in Base64 format. |
 | `face_images_base64` | no | Multiple face images in Base64 format. Each image is uploaded separately. |
@@ -178,6 +181,42 @@ Example response:
 }
 ```
 
+### Update Customer Access Period
+
+Used when Eresto Cloud needs to update an existing customer name or access validity period on every configured gate.
+
+```http
+PATCH /api/sync-customer/{member_id}
+Content-Type: application/json
+Accept: application/json
+```
+
+Example payload:
+
+```json
+{
+  "name": "Updated Customer",
+  "start_date": "2026-08-01T00:00:00",
+  "end_date": "2027-08-01T23:59:59",
+  "status": "inactive"
+}
+```
+
+This endpoint updates Hikvision `UserInfo` only. It does not re-upload card or face data. `status=inactive` disables the Hikvision validity flag.
+
+### Delete Customer From Gates
+
+Used when Eresto Cloud needs to remove a customer credential from every configured gate.
+
+```http
+DELETE /api/sync-customer/{member_id}
+Accept: application/json
+```
+
+This endpoint deletes Hikvision `CardInfo` first, then deletes `UserInfo`.
+
+Face cleanup depends on the Hikvision device behavior. The current upload flow links face data through `employeeNo`, and the package does not expose a safe delete-by-employeeNo face method.
+
 ## Hikvision Endpoint Mapping
 
 The service sends data to Hikvision through the `shaykhnazar/hikvision-isapi` package.
@@ -185,7 +224,10 @@ The service sends data to Hikvision through the `shaykhnazar/hikvision-isapi` pa
 | Data | Hikvision ISAPI Endpoint |
 | --- | --- |
 | Customer/UserInfo | `POST /ISAPI/AccessControl/UserInfo/Record` |
+| Customer/UserInfo update | `PUT /ISAPI/AccessControl/UserInfo/Modify` |
+| Customer/UserInfo delete | `PUT /ISAPI/AccessControl/UserInfo/Delete` |
 | CardInfo | `POST /ISAPI/AccessControl/CardInfo/Record` |
+| CardInfo delete | `PUT /ISAPI/AccessControl/CardInfo/Delete` |
 | Face image | `POST /ISAPI/Intelligent/FDLib/1/picture` |
 
 Face data uses Hikvision FDLib `1` by default.

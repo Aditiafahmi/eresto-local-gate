@@ -55,4 +55,63 @@ class CustomerGateSyncService
 
         return $results;
     }
+
+    public function updateAccess(array $syncPayload): array
+    {
+        $person = $syncPayload['person'];
+        $results = [];
+
+        foreach (Hikvision::availableDevices() as $deviceName) {
+            try {
+                $client = Hikvision::device($deviceName);
+                $personService = new PersonService($client);
+
+                $personService->update($person);
+
+                $results[$deviceName] = [
+                    'status' => 'success',
+                    'message' => 'Customer access period updated successfully',
+                ];
+            } catch (Exception $e) {
+                Log::error("Failed to update customer {$person->employeeNo} on gate {$deviceName}: ".$e->getMessage());
+
+                $results[$deviceName] = [
+                    'status' => 'failed',
+                    'error' => $e->getMessage(),
+                ];
+            }
+        }
+
+        return $results;
+    }
+
+    public function delete(string $memberId): array
+    {
+        $results = [];
+
+        foreach (Hikvision::availableDevices() as $deviceName) {
+            try {
+                $client = Hikvision::device($deviceName);
+                $personService = new PersonService($client);
+                $cardService = new CardService($client);
+
+                $cardService->delete([$memberId]);
+                $personService->delete([$memberId]);
+
+                $results[$deviceName] = [
+                    'status' => 'success',
+                    'message' => 'Customer card and person data deleted successfully',
+                ];
+            } catch (Exception $e) {
+                Log::error("Failed to delete customer {$memberId} from gate {$deviceName}: ".$e->getMessage());
+
+                $results[$deviceName] = [
+                    'status' => 'failed',
+                    'error' => $e->getMessage(),
+                ];
+            }
+        }
+
+        return $results;
+    }
 }

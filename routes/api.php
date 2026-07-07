@@ -10,3 +10,5 @@ Route::get('/user', function (Request $request) {
 
 // Route untuk sinkronisasi dari Eresto Cloud ke Mesin Hikvision
 Route::post('/sync-customer', [HikvisionSyncController::class, 'syncCustomerToGates']);
+Route::patch('/sync-customer/{memberId}', [HikvisionSyncController::class, 'updateCustomerAccessOnGates']);
+Route::delete('/sync-customer/{memberId}', [HikvisionSyncController::class, 'deleteCustomerFromGates']);

@@ -43,17 +43,9 @@ class CustomerGatePayloadBuilder
 
     private function faceImagesBase64(array $customer): array
     {
-        if (! empty($customer['face_images_base64']) && is_array($customer['face_images_base64'])) {
-            return array_values(array_filter(
-                $customer['face_images_base64'],
-                fn ($faceImage) => is_string($faceImage) && $faceImage !== ''
-            ));
-        }
-
-        $singleFaceImage = $customer['face_image_base64'] ?? $customer['avatar_base64'] ?? null;
-
-        return is_string($singleFaceImage) && $singleFaceImage !== ''
-            ? [$singleFaceImage]
-            : [];
+        return array_values(array_filter(
+            $customer['face_images_base64'] ?? [],
+            fn ($faceImage) => is_string($faceImage) && $faceImage !== ''
+        ));
     }
 }

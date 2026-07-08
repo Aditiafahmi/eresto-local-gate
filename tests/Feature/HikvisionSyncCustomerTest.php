@@ -20,13 +20,12 @@ class HikvisionSyncCustomerTest extends TestCase
             'start_date' => '2026-07-07T00:00:00',
             'end_date' => '2026-12-31T23:59:59',
             'card_no' => 'CARD-MOCK-001',
-            'face_image_base64' => 'base64-image',
+            'face_images_base64' => ['base64-image'],
         ]);
 
-        $response->assertOk()
-            ->assertJsonPath('data.xgym_entrance.status', 'success')
-            ->assertJsonPath('data.xgym_entrance.face_synced', true)
-            ->assertJsonPath('data.xgym_entrance.face_image_count', 1);
+        $response->assertStatus(202)
+            ->assertJsonPath('message', 'Sync job queued')
+            ->assertJsonPath('member_id', 'TEST-MOCK-001');
 
         $this->assertCount(3, $httpClient->posts);
         $this->assertStringContainsString('/ISAPI/AccessControl/UserInfo/Record', $httpClient->posts[0]['uri']);
@@ -51,10 +50,9 @@ class HikvisionSyncCustomerTest extends TestCase
             'end_date' => '2026-12-31T23:59:59',
         ]);
 
-        $response->assertOk()
-            ->assertJsonPath('data.xgym_entrance.status', 'success')
-            ->assertJsonPath('data.xgym_entrance.face_synced', false)
-            ->assertJsonPath('data.xgym_entrance.face_image_count', 0);
+        $response->assertStatus(202)
+            ->assertJsonPath('message', 'Sync job queued')
+            ->assertJsonPath('member_id', 'M-1261-ABCD');
 
         $this->assertCount(2, $httpClient->posts);
         $this->assertStringContainsString('/ISAPI/AccessControl/UserInfo/Record', $httpClient->posts[0]['uri']);
@@ -78,10 +76,9 @@ class HikvisionSyncCustomerTest extends TestCase
             ],
         ]);
 
-        $response->assertOk()
-            ->assertJsonPath('data.xgym_entrance.status', 'success')
-            ->assertJsonPath('data.xgym_entrance.face_synced', true)
-            ->assertJsonPath('data.xgym_entrance.face_image_count', 3);
+        $response->assertStatus(202)
+            ->assertJsonPath('message', 'Sync job queued')
+            ->assertJsonPath('member_id', 'M-1262-WXYZ');
 
         $this->assertCount(5, $httpClient->posts);
         $this->assertStringContainsString('/ISAPI/AccessControl/UserInfo/Record', $httpClient->posts[0]['uri']);

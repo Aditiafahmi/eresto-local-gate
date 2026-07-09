@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Services\Cloud\CloudCustomerClient;
 use App\Services\Hikvision\CustomerGatePayloadBuilder;
 use App\Services\Hikvision\CustomerGateSyncService;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -16,17 +17,28 @@ class SyncCustomerToGatesJob implements ShouldQueue
     public int $timeout = 120;
 
     public function __construct(
-        private readonly array $customer
+        private readonly string $memberId,
+        private readonly string $event = 'customer.updated',
+        private readonly ?array $customer = null
     ) {
         $this->onQueue('hikvision-sync');
     }
 
     public function handle(
+        CloudCustomerClient $cloudCustomerClient,
         CustomerGatePayloadBuilder $payloadBuilder,
         CustomerGateSyncService $gateSyncService
     ): void {
+        if ($this->event === 'customer.deleted') {
+            $gateSyncService->delete($this->memberId);
+
+            return;
+        }
+
+        $customer = $this->customer ?? $cloudCustomerClient->findCustomer($this->memberId);
+
         $gateSyncService->sync(
-            $payloadBuilder->build($this->customer)
+            $payloadBuilder->build($customer)
         );
     }
 
@@ -39,7 +51,8 @@ class SyncCustomerToGatesJob implements ShouldQueue
     {
         return [
             'hikvision',
-            'customer:'.$this->customer['member_id'],
+            'event:'.$this->event,
+            'customer:'.$this->memberId,
         ];
     }
 }

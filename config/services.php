@@ -28,6 +28,13 @@ return [
         'key' => env('RESEND_KEY'),
     ],
 
+    'eresto_cloud' => [
+        'base_url' => env('ERESTO_CLOUD_URL'),
+        'token' => env('ERESTO_CLOUD_TOKEN'),
+        'timeout' => env('ERESTO_CLOUD_TIMEOUT', 10),
+        'webhook_secret' => env('ERESTO_CLOUD_WEBHOOK_SECRET'),
+    ],
+
     'slack' => [
         'notifications' => [
             'bot_user_oauth_token' => env('SLACK_BOT_USER_OAUTH_TOKEN'),

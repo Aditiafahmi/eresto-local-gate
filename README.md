@@ -12,10 +12,11 @@ This service receives customer data from Eresto Cloud, builds Hikvision-compatib
 
 ```text
 Eresto Cloud
-  -> POST /api/sync-customer
-  -> HikvisionSyncController
+  -> POST /cloud/webhook { event, member_id }
+  -> CloudWebhookController
   -> SyncCustomerToGatesJob queue
   -> Queue worker / Horizon
+  -> CloudCustomerClient GET /api/customers/{member_id}
   -> CustomerGatePayloadBuilder
   -> CustomerGateSyncService
   -> Hikvision gate devices
@@ -25,13 +26,22 @@ Eresto Cloud
 
 ```text
 routes/api.php
-  API route definitions.
+  Manual API route definitions.
+
+routes/web.php
+  Local server webhook route definitions.
+
+app/Http/Controllers/CloudWebhookController.php
+  Receives cloud customer events, validates optional HMAC signature, and queues sync jobs.
 
 app/Http/Controllers/Api/HikvisionSyncController.php
-  Receives and validates sync customer requests, then queues Hikvision sync jobs.
+  Receives and validates manual full-payload sync requests, then queues Hikvision sync jobs.
 
 app/Jobs/SyncCustomerToGatesJob.php
-  Background job that builds the Hikvision payload and pushes it to configured gates.
+  Background job that fetches customer data when needed, builds the Hikvision payload, and pushes it to configured gates.
+
+app/Services/Cloud/CloudCustomerClient.php
+  Fetches customer records from Eresto Cloud API.
 
 app/Services/Hikvision/CustomerGatePayloadBuilder.php
   Builds Hikvision Person, Card, and face image payload data.
@@ -43,7 +53,7 @@ config/hikvision.php
   Hikvision device configuration.
 
 tests/Feature/HikvisionSyncCustomerTest.php
-  Mocked feature tests for the sync-customer endpoint.
+  Mocked feature tests for webhook and sync-customer endpoints.
 ```
 
 ## Requirements
@@ -108,9 +118,29 @@ Current configured device keys:
 - `xgym_entrance`
 - `xgym_exit`
 
+## Eresto Cloud Configuration
+
+Configure the Cloud API base URL and optional webhook secret in `.env`:
+
+```env
+ERESTO_CLOUD_URL=https://cloud-api.example.com
+ERESTO_CLOUD_TOKEN=
+ERESTO_CLOUD_TIMEOUT=10
+ERESTO_CLOUD_WEBHOOK_SECRET=
+```
+
+If `ERESTO_CLOUD_WEBHOOK_SECRET` is set, incoming `/cloud/webhook` requests must include one of these headers:
+
+```text
+X-Hub-Signature: sha256=<hmac>
+X-Hub-Signature-256: sha256=<hmac>
+```
+
+The HMAC is calculated from the raw request body using SHA-256 and the shared secret.
+
 ## Queue Configuration
 
-The `POST /api/sync-customer` endpoint is asynchronous. It validates the request, queues `SyncCustomerToGatesJob`, and returns `202 Accepted`. A queue worker then pushes the customer to Hikvision devices.
+The `/cloud/webhook` and `/api/sync-customer` endpoints are asynchronous. They validate the request, queue `SyncCustomerToGatesJob`, and return `202 Accepted`. A queue worker then pushes the customer to Hikvision devices.
 
 For simple local testing without Redis, use the sync queue:
 
@@ -149,9 +179,56 @@ docker compose exec -T laravel.test php artisan queue:demo-horizon 30 --sleep=5
 
 This sends 30 dummy jobs to the `hikvision-sync` queue. They only sleep briefly and write a small log entry, so they are safe for dashboard testing.
 
-## API Endpoint
+## Local Server Endpoints
 
-### Sync Customer To Gates
+### Cloud Webhook
+
+Main workflow endpoint based on the senior design.
+
+```http
+POST /cloud/webhook
+Content-Type: application/json
+Accept: application/json
+```
+
+Example payload:
+
+```json
+{
+  "event": "customer.updated",
+  "member_id": "M-1260-VJIV"
+}
+```
+
+Supported events:
+
+| Event | Behavior |
+| --- | --- |
+| `customer.created` | Fetch full customer data from Cloud API, then add/sync to gates. |
+| `customer.updated` | Fetch full customer data from Cloud API, then update/sync to gates. |
+| `customer.deleted` | Delete customer from gates without fetching full Cloud data. |
+
+Example response:
+
+```json
+{
+  "message": "Webhook accepted",
+  "event": "customer.updated",
+  "member_id": "M-1260-VJIV"
+}
+```
+
+For created/updated events, the queued job calls:
+
+```http
+GET /api/customers/{member_id}
+```
+
+The Cloud API response may be either the customer object directly or wrapped in `data`.
+
+### Manual Sync Customer To Gates
+
+This endpoint is kept for local/manual testing when you already have the full customer payload.
 
 ```http
 POST /api/sync-customer

@@ -30,7 +30,11 @@ class HikvisionSyncController extends Controller
     ) {
         $validated = $this->validatedSyncPayload($request);
 
-        SyncCustomerToGatesJob::dispatch($validated);
+        SyncCustomerToGatesJob::dispatch(
+            $validated['member_id'],
+            'customer.updated',
+            $validated
+        );
 
         return response()->json([
             'message' => 'Sync job queued',

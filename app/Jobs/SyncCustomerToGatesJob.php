@@ -2,11 +2,12 @@
 
 namespace App\Jobs;
 
+use App\DTOs\CloudCustomerData;
 use App\Services\Cloud\CloudCustomerClient;
-use App\Services\Hikvision\CustomerGatePayloadBuilder;
-use App\Services\Hikvision\CustomerGateSyncService;
+use App\Services\Hikvision\CustomerGateSyncStatusStore;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Throwable;
 
 class SyncCustomerToGatesJob implements ShouldQueue
 {
@@ -18,33 +19,46 @@ class SyncCustomerToGatesJob implements ShouldQueue
 
     public function __construct(
         private readonly string $memberId,
+        private readonly array $deviceNames,
         private readonly string $event = 'customer.updated',
-        private readonly ?array $customer = null
+        private readonly ?CloudCustomerData $customer = null
     ) {
         $this->onQueue('hikvision-sync');
     }
 
-    public function handle(
-        CloudCustomerClient $cloudCustomerClient,
-        CustomerGatePayloadBuilder $payloadBuilder,
-        CustomerGateSyncService $gateSyncService
-    ): void {
-        if ($this->event === 'customer.deleted') {
-            $gateSyncService->delete($this->memberId);
+    public function handle(CloudCustomerClient $cloudCustomerClient): void
+    {
+        $customer = $this->event === 'customer.deleted'
+            ? null
+            : ($this->customer ?? $cloudCustomerClient->findCustomer($this->memberId));
 
-            return;
+        foreach ($this->deviceNames as $deviceName) {
+            SyncCustomerToGateJob::dispatch(
+                $this->memberId,
+                $deviceName,
+                $this->event,
+                $customer
+            );
         }
+    }
 
-        $customer = $this->customer ?? $cloudCustomerClient->findCustomer($this->memberId);
+    public function failed(?Throwable $exception): void
+    {
+        $statusStore = app(CustomerGateSyncStatusStore::class);
 
-        $gateSyncService->sync(
-            $payloadBuilder->build($customer)
-        );
+        foreach ($this->deviceNames as $deviceName) {
+            $statusStore->markFailed(
+                $this->memberId,
+                $deviceName,
+                max($this->attempts(), 1),
+                $exception?->getMessage() ?? 'The customer sync fan-out job failed.'
+            );
+        }
     }
 
     public function backoff(): array
     {
-        return [10, 60, 300];
+        return [10, 60];
     }
 
     public function tags(): array

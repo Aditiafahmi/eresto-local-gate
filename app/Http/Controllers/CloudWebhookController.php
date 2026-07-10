@@ -2,14 +2,16 @@
 
 namespace App\Http\Controllers;
 
-use App\Jobs\SyncCustomerToGatesJob;
+use App\Services\Hikvision\CustomerGateSyncDispatcher;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class CloudWebhookController extends Controller
 {
-    public function __invoke(Request $request): JsonResponse
-    {
+    public function __invoke(
+        Request $request,
+        CustomerGateSyncDispatcher $syncDispatcher
+    ): JsonResponse {
         $this->verifySignature($request);
 
         $validated = $request->validate([
@@ -17,7 +19,7 @@ class CloudWebhookController extends Controller
             'member_id' => 'required|string',
         ]);
 
-        SyncCustomerToGatesJob::dispatch(
+        $deviceNames = $syncDispatcher->dispatch(
             $validated['member_id'],
             $validated['event']
         );
@@ -26,6 +28,7 @@ class CloudWebhookController extends Controller
             'message' => 'Webhook accepted',
             'event' => $validated['event'],
             'member_id' => $validated['member_id'],
+            'devices' => $deviceNames,
         ], 202);
     }
 

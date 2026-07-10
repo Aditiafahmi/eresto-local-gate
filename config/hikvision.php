@@ -62,4 +62,9 @@ return [
         'enabled' => env('HIKVISION_LOGGING', true),
         'channel' => env('HIKVISION_LOG_CHANNEL', 'stack'),
     ],
+
+    'sync_status' => [
+        'store' => env('HIKVISION_SYNC_STATUS_STORE', 'redis'),
+        'ttl' => env('HIKVISION_SYNC_STATUS_TTL', 604800),
+    ],
 ];

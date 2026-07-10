@@ -2,18 +2,22 @@
 
 namespace App\Services\Cloud;
 
+use App\DTOs\CloudCustomerData;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
 
 class CloudCustomerClient
 {
-    public function findCustomer(string $memberId): array
+    public function findCustomer(string $memberId): CloudCustomerData
     {
         $response = $this->request()
             ->get('/api/customers/'.rawurlencode($memberId));
 
-        return $this->responseData($response->throw()->json());
+        return CloudCustomerData::fromArray(
+            $this->responseData($response->throw()->json()),
+            $memberId
+        );
     }
 
     public function delta(?string $since = null): array

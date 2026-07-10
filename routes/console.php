@@ -3,6 +3,7 @@
 use App\Jobs\HorizonDemoJob;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Schedule;
 use Illuminate\Support\Str;
 
 Artisan::command('inspire', function () {
@@ -31,3 +32,7 @@ Artisan::command('queue:demo-horizon {count=25 : Number of demo jobs to dispatch
 
     return 0;
 })->purpose('Dispatch safe demo jobs so Horizon can be tested locally');
+
+Schedule::command('sync:delta')
+    ->everyFiveMinutes()
+    ->when(fn () => (bool) config('services.eresto_cloud.delta_sync.enabled'));

@@ -14,31 +14,36 @@ This service receives customer data from Eresto Cloud, builds Hikvision-compatib
 Eresto Cloud
   -> POST /cloud/webhook { event, member_id }
   -> CloudWebhookController
-  -> SyncCustomerToGatesJob queue
+  -> CustomerGateSyncDispatcher (initialize Redis status)
+  -> SyncCustomerToGatesJob coordinator
+  -> SyncCustomerToGateJob per device (fan-out)
   -> Queue worker / Horizon
   -> CloudCustomerClient GET /api/customers/{member_id}
   -> CustomerGatePayloadBuilder
   -> CustomerGateSyncService
-  -> Hikvision gate devices
+  -> One Hikvision gate device per job
 ```
 
 ## Project Structure
 
 ```text
-routes/api.php
-  Manual API route definitions.
-
 routes/web.php
-  Local server webhook route definitions.
+  Local server webhook and sync-status route definitions.
 
 app/Http/Controllers/CloudWebhookController.php
   Receives cloud customer events, validates optional HMAC signature, and queues sync jobs.
 
-app/Http/Controllers/Api/HikvisionSyncController.php
-  Receives and validates manual full-payload sync requests, then queues Hikvision sync jobs.
+app/Http/Controllers/Api/HikvisionSyncStatusController.php
+  Returns the latest per-device customer sync status.
+
+app/DTOs/CloudCustomerData.php
+  Validates and normalizes the Cloud customer contract before queue fan-out.
 
 app/Jobs/SyncCustomerToGatesJob.php
-  Background job that fetches customer data when needed, builds the Hikvision payload, and pushes it to configured gates.
+  Coordinator job that fetches customer data once and fans out one child job per device.
+
+app/Jobs/SyncCustomerToGateJob.php
+  Syncs one customer to one gate with independent retry and backoff.
 
 app/Services/Cloud/CloudCustomerClient.php
   Fetches customer records from Eresto Cloud API.
@@ -47,13 +52,19 @@ app/Services/Hikvision/CustomerGatePayloadBuilder.php
   Builds Hikvision Person, Card, and face image payload data.
 
 app/Services/Hikvision/CustomerGateSyncService.php
-  Sends customer data to every configured Hikvision gate.
+  Performs idempotent writes to a specific Hikvision gate.
+
+app/Services/Hikvision/CustomerGateSyncDispatcher.php
+  Initializes status and queues the coordinator with a fixed device list.
+
+app/Services/Hikvision/CustomerGateSyncStatusStore.php
+  Stores aggregate and per-device sync status with a configurable TTL.
 
 config/hikvision.php
   Hikvision device configuration.
 
 tests/Feature/HikvisionSyncCustomerTest.php
-  Mocked feature tests for webhook and sync-customer endpoints.
+  Mocked feature tests for dispatcher, per-device jobs, status, card, and face sync behavior.
 ```
 
 ## Requirements
@@ -140,7 +151,7 @@ The HMAC is calculated from the raw request body using SHA-256 and the shared se
 
 ## Queue Configuration
 
-The `/cloud/webhook` and `/api/sync-customer` endpoints are asynchronous. They validate the request, queue `SyncCustomerToGatesJob`, and return `202 Accepted`. A queue worker then pushes the customer to Hikvision devices.
+The `/cloud/webhook` endpoint is asynchronous. It validates the request, queues a coordinator job, and returns `202 Accepted`. The coordinator fetches Cloud data once when needed, then queues one `SyncCustomerToGateJob` per configured device. A failed gate can therefore retry without repeating successful gate work.
 
 For simple local testing without Redis, use the sync queue:
 
@@ -155,6 +166,8 @@ QUEUE_CONNECTION=redis
 REDIS_HOST=redis
 REDIS_PORT=6379
 REDIS_QUEUE=hikvision-sync
+HIKVISION_SYNC_STATUS_STORE=redis
+HIKVISION_SYNC_STATUS_TTL=604800
 ```
 
 Run a Laravel queue worker through Docker:
@@ -214,7 +227,8 @@ Example response:
 {
   "message": "Webhook accepted",
   "event": "customer.updated",
-  "member_id": "M-1260-VJIV"
+  "member_id": "M-1260-VJIV",
+  "devices": ["xgym_entrance", "xgym_exit"]
 }
 ```
 
@@ -226,56 +240,54 @@ GET /api/customers/{member_id}
 
 The Cloud API response may be either the customer object directly or wrapped in `data`.
 
-### Manual Sync Customer To Gates
+Before fan-out, the response is converted into the local `CloudCustomerData` DTO. The DTO accepts only the fields used by the gate flow; additional Cloud fields are ignored.
 
-This endpoint is kept for local/manual testing when you already have the full customer payload.
+| Field | Rule | Default |
+| --- | --- | --- |
+| `member_id` | Required string; must match the requested member ID. | none |
+| `name` | Required string. | none |
+| `start_date` | Required valid date. | none |
+| `end_date` | Required valid date on or after `start_date`. | none |
+| `status` | `active` or `inactive`. | `active` |
+| `card_no` | Optional string. | `member_id` when empty |
+| `face_images_base64` | Optional array of non-empty strings. | `[]` |
+
+An invalid Cloud response throws a validation exception. The coordinator job is retried according to its queue policy and is marked failed when all attempts are exhausted.
+
+### Check Customer Sync Status
+
+The dispatcher records one status per gate. Status data uses the configured cache store (Redis by default) and expires after `HIKVISION_SYNC_STATUS_TTL` seconds.
 
 ```http
-POST /api/sync-customer
-Content-Type: application/json
+GET /admin/status/{member_id}
 Accept: application/json
 ```
-
-Example payload:
-
-```json
-{
-  "member_id": "M-1260-VJIV",
-  "name": "joookoo",
-  "start_date": "2026-07-07T00:00:00",
-  "end_date": "2026-12-31T23:59:59",
-  "status": "active",
-  "card_no": "CARD-M-1260-VJIV",
-  "face_images_base64": [
-    "base64-front",
-    "base64-left",
-    "base64-right"
-  ]
-}
-```
-
-Supported fields:
-
-| Field | Required | Description |
-| --- | --- | --- |
-| `member_id` | yes | Customer/member identifier. Mapped to Hikvision `employeeNo`. |
-| `name` | yes | Customer name. |
-| `start_date` | yes | Customer access start time. |
-| `end_date` | yes | Customer access end time. |
-| `status` | no | Customer access status. Supported values: `active`, `inactive`. Defaults to `active`. |
-| `card_no` | no | Card credential number. Defaults to `member_id` if empty. |
-| `face_images_base64` | no | Multiple face images in Base64 format. Each image is uploaded separately. |
 
 Example response:
 
 ```json
 {
-  "message": "Sync job queued",
-  "member_id": "M-1260-VJIV"
+  "data": {
+    "member_id": "M-1260-VJIV",
+    "event": "customer.updated",
+    "status": "success",
+    "devices": {
+      "xgym_entrance": {
+        "device": "xgym_entrance",
+        "status": "success",
+        "attempt": 1
+      },
+      "xgym_exit": {
+        "device": "xgym_exit",
+        "status": "success",
+        "attempt": 1
+      }
+    }
+  }
 }
 ```
 
-The actual Hikvision push happens in the queue worker. In testing, `QUEUE_CONNECTION=sync` executes the job immediately.
+Per-device states are `pending`, `processing`, `retrying`, `success`, or `failed`. The endpoint returns `404` when no status exists or its TTL has expired.
 
 ### Idempotent Sync Behavior
 
@@ -288,42 +300,6 @@ Before writing customer data to a gate, the sync service searches the device fir
 | FaceDataRecord | `PUT /ISAPI/Intelligent/FDLib/FDModify` | `POST /ISAPI/Intelligent/FDLib/FaceDataRecord` |
 
 Face records use stable FPIDs so retake/replace can update existing face records instead of creating duplicates.
-
-### Update Customer Access Period
-
-Used when Eresto Cloud needs to update an existing customer name or access validity period on every configured gate.
-
-```http
-PATCH /api/sync-customer/{member_id}
-Content-Type: application/json
-Accept: application/json
-```
-
-Example payload:
-
-```json
-{
-  "name": "Updated Customer",
-  "start_date": "2026-08-01T00:00:00",
-  "end_date": "2027-08-01T23:59:59",
-  "status": "inactive"
-}
-```
-
-This endpoint updates Hikvision `UserInfo` only. It does not re-upload card or face data. `status=inactive` disables the Hikvision validity flag.
-
-### Delete Customer From Gates
-
-Used when Eresto Cloud needs to remove a customer credential from every configured gate.
-
-```http
-DELETE /api/sync-customer/{member_id}
-Accept: application/json
-```
-
-This endpoint deletes Hikvision `CardInfo` first, then deletes `UserInfo`.
-
-Face cleanup is intentionally not included in customer delete yet. Face records are keyed by FPID, so a safe delete/cleanup flow can be added later without using global face-library delete endpoints.
 
 ## Hikvision Endpoint Mapping
 
@@ -373,24 +349,6 @@ docker compose exec -T laravel.test php artisan test tests/Feature/HikvisionSync
 ```
 
 The test uses a fake Hikvision HTTP client, so it does not require a real gate device.
-
-## Manual Request Example
-
-```bash
-curl -X POST http://127.0.0.1/api/sync-customer \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json" \
-  -d '{
-    "member_id": "TEST-001",
-    "name": "Test Customer",
-    "start_date": "2026-07-07T00:00:00",
-    "end_date": "2026-12-31T23:59:59",
-    "card_no": "CARD-TEST-001",
-    "face_images_base64": ["base64-image"]
-  }'
-```
-
-This manual request queues a Hikvision sync job. If `QUEUE_CONNECTION=sync`, the request will call real configured Hikvision devices before responding. If `QUEUE_CONNECTION=redis` or `database`, make sure a queue worker is running.
 
 ## Development Notes
 

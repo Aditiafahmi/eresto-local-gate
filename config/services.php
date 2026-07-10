@@ -33,6 +33,13 @@ return [
         'token' => env('ERESTO_CLOUD_TOKEN'),
         'timeout' => env('ERESTO_CLOUD_TIMEOUT', 10),
         'webhook_secret' => env('ERESTO_CLOUD_WEBHOOK_SECRET'),
+        'delta_sync' => [
+            'enabled' => env('ERESTO_DELTA_SYNC_ENABLED', false),
+            'store' => env('ERESTO_DELTA_SYNC_STORE', 'redis'),
+            'cursor_key' => env('ERESTO_DELTA_SYNC_CURSOR_KEY', 'eresto:customer-delta:last-cursor'),
+            'lock_key' => env('ERESTO_DELTA_SYNC_LOCK_KEY', 'eresto:customer-delta:lock'),
+            'lock_seconds' => env('ERESTO_DELTA_SYNC_LOCK_SECONDS', 1800),
+        ],
     ],
 
     'slack' => [

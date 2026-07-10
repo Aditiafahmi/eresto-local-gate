@@ -3,6 +3,7 @@
 namespace App\Services\Cloud;
 
 use App\DTOs\CloudCustomerData;
+use App\DTOs\CloudCustomerDeltaData;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
@@ -20,7 +21,7 @@ class CloudCustomerClient
         );
     }
 
-    public function delta(?string $since = null): array
+    public function delta(?string $since = null): CloudCustomerDeltaData
     {
         $query = [];
 
@@ -31,7 +32,13 @@ class CloudCustomerClient
         $response = $this->request()
             ->get('/api/customers/delta', $query);
 
-        return $this->responseData($response->throw()->json());
+        $responseData = $response->throw()->json();
+
+        if (! is_array($responseData)) {
+            throw new RuntimeException('Eresto Cloud returned an invalid delta JSON response.');
+        }
+
+        return CloudCustomerDeltaData::fromArray($responseData);
     }
 
     public function markFaceEnrolled(string $memberId): void

@@ -2,6 +2,7 @@
 
 namespace Tests\Support;
 
+use RuntimeException;
 use Shaykhnazar\HikvisionIsapi\Client\Contracts\HttpClientInterface;
 
 class RecordingHikvisionHttpClient implements HttpClientInterface
@@ -21,6 +22,15 @@ class RecordingHikvisionHttpClient implements HttpClientInterface
     private array $existingFaceFpids = [];
 
     private array $existingPersonEmployeeNos = [];
+
+    private array $failingHosts = [];
+
+    public function withFailingHost(string $host): self
+    {
+        $this->failingHosts[] = $host;
+
+        return $this;
+    }
 
     public function withExistingPerson(string $employeeNo): self
     {
@@ -45,11 +55,15 @@ class RecordingHikvisionHttpClient implements HttpClientInterface
 
     public function get(string $uri, array $options = []): array
     {
+        $this->failWhenConfigured($uri);
+
         return ['status' => 'ok'];
     }
 
     public function post(string $uri, array $data = [], array $options = []): array
     {
+        $this->failWhenConfigured($uri);
+
         if (str_contains($uri, '/ISAPI/AccessControl/UserInfo/Search')) {
             return $this->recordUserSearch($uri, $data, $options);
         }
@@ -73,6 +87,8 @@ class RecordingHikvisionHttpClient implements HttpClientInterface
 
     public function put(string $uri, array $data = [], array $options = []): array
     {
+        $this->failWhenConfigured($uri);
+
         $this->puts[] = [
             'uri' => $uri,
             'data' => $data,
@@ -84,11 +100,15 @@ class RecordingHikvisionHttpClient implements HttpClientInterface
 
     public function delete(string $uri, array $options = []): array
     {
+        $this->failWhenConfigured($uri);
+
         return ['status' => 'ok'];
     }
 
     public function postMultipart(string $uri, array $multipart = [], array $options = []): array
     {
+        $this->failWhenConfigured($uri);
+
         $this->postMultiparts[] = [
             'uri' => $uri,
             'multipart' => $multipart,
@@ -100,6 +120,8 @@ class RecordingHikvisionHttpClient implements HttpClientInterface
 
     public function putMultipart(string $uri, array $multipart = [], array $options = []): array
     {
+        $this->failWhenConfigured($uri);
+
         $this->putMultiparts[] = [
             'uri' => $uri,
             'multipart' => $multipart,
@@ -199,5 +221,14 @@ class RecordingHikvisionHttpClient implements HttpClientInterface
             'numOfMatches' => 0,
             'MatchList' => [],
         ];
+    }
+
+    private function failWhenConfigured(string $uri): void
+    {
+        foreach ($this->failingHosts as $host) {
+            if (str_contains($uri, '://'.$host.':')) {
+                throw new RuntimeException("Simulated Hikvision connection failure for {$host}");
+            }
+        }
     }
 }

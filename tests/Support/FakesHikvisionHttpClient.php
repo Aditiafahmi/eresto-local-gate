@@ -9,21 +9,25 @@ use Shaykhnazar\HikvisionIsapi\Facades\Hikvision;
 
 trait FakesHikvisionHttpClient
 {
-    private function fakeHikvisionHttpClient(): RecordingHikvisionHttpClient
+    private function fakeHikvisionHttpClient(array $deviceNames = ['xgym_entrance']): RecordingHikvisionHttpClient
     {
+        $devices = [];
+
+        foreach (array_values($deviceNames) as $index => $deviceName) {
+            $devices[$deviceName] = [
+                'ip' => '10.0.0.'.(10 + $index),
+                'port' => 80,
+                'username' => 'admin',
+                'password' => 'secret',
+                'protocol' => 'http',
+                'timeout' => 30,
+                'verify_ssl' => false,
+            ];
+        }
+
         config([
-            'hikvision.default' => 'xgym_entrance',
-            'hikvision.devices' => [
-                'xgym_entrance' => [
-                    'ip' => '10.0.0.10',
-                    'port' => 80,
-                    'username' => 'admin',
-                    'password' => 'secret',
-                    'protocol' => 'http',
-                    'timeout' => 30,
-                    'verify_ssl' => false,
-                ],
-            ],
+            'hikvision.default' => $deviceNames[0] ?? null,
+            'hikvision.devices' => $devices,
         ]);
 
         $httpClient = new RecordingHikvisionHttpClient;

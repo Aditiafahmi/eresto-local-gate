@@ -2,8 +2,17 @@
 
 namespace Tests\Feature;
 
+use App\DTOs\CloudCustomerData;
+use App\Jobs\SyncCustomerToGateJob;
+use App\Services\Cloud\CloudCustomerClient;
+use App\Services\Hikvision\CustomerGatePayloadBuilder;
+use App\Services\Hikvision\CustomerGateSyncDispatcher;
+use App\Services\Hikvision\CustomerGateSyncService;
+use App\Services\Hikvision\CustomerGateSyncStatusStore;
+use Illuminate\Support\Facades\Queue;
 use Tests\Support\FakesHikvisionHttpClient;
 use Tests\TestCase;
+use Throwable;
 
 class HikvisionSyncCustomerTest extends TestCase
 {
@@ -13,7 +22,7 @@ class HikvisionSyncCustomerTest extends TestCase
     {
         $httpClient = $this->fakeHikvisionHttpClient();
 
-        $response = $this->postJson('/api/sync-customer', [
+        $this->dispatchCustomer([
             'member_id' => 'TEST-MOCK-001',
             'name' => 'Mock Customer',
             'start_date' => '2026-07-07T00:00:00',
@@ -21,10 +30,6 @@ class HikvisionSyncCustomerTest extends TestCase
             'card_no' => 'CARD-MOCK-001',
             'face_images_base64' => ['base64-image'],
         ]);
-
-        $response->assertStatus(202)
-            ->assertJsonPath('message', 'Sync job queued')
-            ->assertJsonPath('member_id', 'TEST-MOCK-001');
 
         $this->assertCount(2, $httpClient->posts);
         $this->assertStringContainsString('/ISAPI/AccessControl/UserInfo/Record', $httpClient->posts[0]['uri']);
@@ -46,21 +51,109 @@ class HikvisionSyncCustomerTest extends TestCase
     {
         $httpClient = $this->fakeHikvisionHttpClient();
 
-        $response = $this->postJson('/api/sync-customer', [
+        $this->dispatchCustomer([
             'member_id' => 'M-1261-ABCD',
             'name' => 'Customer Test',
             'start_date' => '2026-07-07T00:00:00',
             'end_date' => '2026-12-31T23:59:59',
         ]);
 
-        $response->assertStatus(202)
-            ->assertJsonPath('message', 'Sync job queued')
-            ->assertJsonPath('member_id', 'M-1261-ABCD');
-
         $this->assertCount(2, $httpClient->posts);
         $this->assertStringContainsString('/ISAPI/AccessControl/UserInfo/Record', $httpClient->posts[0]['uri']);
         $this->assertStringContainsString('/ISAPI/AccessControl/CardInfo/Record', $httpClient->posts[1]['uri']);
         $this->assertSame('M-1261-ABCD', $httpClient->posts[1]['data']['CardInfo']['cardNo']);
+    }
+
+    public function test_sync_customer_fans_out_one_job_per_hikvision_device(): void
+    {
+        $this->fakeHikvisionHttpClient(['xgym_entrance', 'xgym_exit']);
+        Queue::fake([SyncCustomerToGateJob::class]);
+
+        $deviceNames = $this->dispatchCustomer([
+            'member_id' => 'M-FANOUT',
+            'name' => 'Fan Out Customer',
+            'start_date' => '2026-07-07T00:00:00',
+            'end_date' => '2026-12-31T23:59:59',
+        ]);
+
+        $this->assertSame(['xgym_entrance', 'xgym_exit'], $deviceNames);
+
+        Queue::assertPushed(SyncCustomerToGateJob::class, 2);
+        Queue::assertPushed(
+            SyncCustomerToGateJob::class,
+            fn (SyncCustomerToGateJob $job) => $job->memberId() === 'M-FANOUT'
+                && $job->deviceName() === 'xgym_entrance'
+        );
+        Queue::assertPushed(
+            SyncCustomerToGateJob::class,
+            fn (SyncCustomerToGateJob $job) => $job->memberId() === 'M-FANOUT'
+                && $job->deviceName() === 'xgym_exit'
+        );
+
+        $this->getJson('/admin/status/M-FANOUT')
+            ->assertOk()
+            ->assertJsonPath('data.status', 'pending')
+            ->assertJsonPath('data.devices.xgym_entrance.status', 'pending')
+            ->assertJsonPath('data.devices.xgym_exit.status', 'pending');
+    }
+
+    public function test_one_gate_failure_does_not_overwrite_a_successful_gate_status(): void
+    {
+        $this->fakeHikvisionHttpClient(['xgym_entrance', 'xgym_exit'])
+            ->withFailingHost('10.0.0.11');
+
+        $statusStore = app(CustomerGateSyncStatusStore::class);
+        $statusStore->begin(
+            'M-PARTIAL',
+            'customer.updated',
+            ['xgym_entrance', 'xgym_exit']
+        );
+
+        $customer = CloudCustomerData::fromArray([
+            'member_id' => 'M-PARTIAL',
+            'name' => 'Partial Sync Customer',
+            'start_date' => '2026-07-07T00:00:00',
+            'end_date' => '2026-12-31T23:59:59',
+        ]);
+
+        $this->runGateJob(new SyncCustomerToGateJob(
+            'M-PARTIAL',
+            'xgym_entrance',
+            'customer.updated',
+            $customer
+        ));
+
+        $failedJob = new SyncCustomerToGateJob(
+            'M-PARTIAL',
+            'xgym_exit',
+            'customer.updated',
+            $customer
+        );
+
+        $failure = null;
+
+        try {
+            $this->runGateJob($failedJob);
+        } catch (Throwable $exception) {
+            $failure = $exception;
+        }
+
+        $this->assertNotNull($failure, 'The simulated gate failure did not throw an exception.');
+        $failedJob->failed($failure);
+
+        $this->assertSame(3, $failedJob->tries);
+        $this->assertSame([10, 60], $failedJob->backoff());
+
+        $this->getJson('/admin/status/M-PARTIAL')
+            ->assertOk()
+            ->assertJsonPath('data.status', 'failed')
+            ->assertJsonPath('data.devices.xgym_entrance.status', 'success')
+            ->assertJsonPath('data.devices.xgym_exit.status', 'failed')
+            ->assertJsonPath('data.devices.xgym_exit.attempt', 1)
+            ->assertJsonPath(
+                'data.devices.xgym_exit.last_error',
+                'Simulated Hikvision connection failure for 10.0.0.11'
+            );
     }
 
     public function test_sync_customer_updates_existing_hikvision_customer_instead_of_adding_duplicate(): void
@@ -69,17 +162,13 @@ class HikvisionSyncCustomerTest extends TestCase
             ->withExistingPerson('M-EXISTING')
             ->withExistingCard('M-EXISTING');
 
-        $response = $this->postJson('/api/sync-customer', [
+        $this->dispatchCustomer([
             'member_id' => 'M-EXISTING',
             'name' => 'Existing Customer Updated',
             'start_date' => '2026-07-07T00:00:00',
             'end_date' => '2026-12-31T23:59:59',
             'card_no' => 'CARD-UPDATED',
         ]);
-
-        $response->assertStatus(202)
-            ->assertJsonPath('message', 'Sync job queued')
-            ->assertJsonPath('member_id', 'M-EXISTING');
 
         $this->assertCount(2, $httpClient->searches);
         $this->assertStringContainsString('/ISAPI/AccessControl/UserInfo/Search', $httpClient->searches[0]['uri']);
@@ -98,7 +187,7 @@ class HikvisionSyncCustomerTest extends TestCase
     {
         $httpClient = $this->fakeHikvisionHttpClient();
 
-        $response = $this->postJson('/api/sync-customer', [
+        $this->dispatchCustomer([
             'member_id' => 'M-1262-WXYZ',
             'name' => 'Multiple Face Customer',
             'start_date' => '2026-07-07T00:00:00',
@@ -109,10 +198,6 @@ class HikvisionSyncCustomerTest extends TestCase
                 'base64-right',
             ],
         ]);
-
-        $response->assertStatus(202)
-            ->assertJsonPath('message', 'Sync job queued')
-            ->assertJsonPath('member_id', 'M-1262-WXYZ');
 
         $this->assertCount(2, $httpClient->posts);
         $this->assertStringContainsString('/ISAPI/AccessControl/UserInfo/Record', $httpClient->posts[0]['uri']);
@@ -141,7 +226,7 @@ class HikvisionSyncCustomerTest extends TestCase
             ->withExistingFace('M-RETAKE_2')
             ->withExistingFace('M-RETAKE_3');
 
-        $response = $this->postJson('/api/sync-customer', [
+        $this->dispatchCustomer([
             'member_id' => 'M-RETAKE',
             'name' => 'Retake Customer',
             'start_date' => '2026-07-07T00:00:00',
@@ -152,10 +237,6 @@ class HikvisionSyncCustomerTest extends TestCase
                 'new-right',
             ],
         ]);
-
-        $response->assertStatus(202)
-            ->assertJsonPath('message', 'Sync job queued')
-            ->assertJsonPath('member_id', 'M-RETAKE');
 
         $this->assertCount(0, $httpClient->postMultiparts);
         $this->assertCount(3, $httpClient->putMultiparts);
@@ -175,48 +256,29 @@ class HikvisionSyncCustomerTest extends TestCase
         $this->assertSame('new-right', $httpClient->putMultiparts[2]['multipart'][1]['contents']);
     }
 
-    public function test_update_customer_access_calls_hikvision_modify_endpoint(): void
+    public function test_legacy_sync_customer_routes_are_not_available(): void
     {
-        $httpClient = $this->fakeHikvisionHttpClient();
-
-        $response = $this->patchJson('/api/sync-customer/M-1263-EDIT', [
-            'name' => 'Updated Customer',
-            'start_date' => '2026-08-01T00:00:00',
-            'end_date' => '2027-08-01T23:59:59',
-            'status' => 'inactive',
-        ]);
-
-        $response->assertOk()
-            ->assertJsonPath('data.xgym_entrance.status', 'success');
-
-        $this->assertCount(1, $httpClient->puts);
-        $this->assertStringContainsString('/ISAPI/AccessControl/UserInfo/Modify', $httpClient->puts[0]['uri']);
-        $this->assertSame('M-1263-EDIT', $httpClient->puts[0]['data']['UserInfo']['employeeNo']);
-        $this->assertSame('Updated Customer', $httpClient->puts[0]['data']['UserInfo']['name']);
-        $this->assertFalse($httpClient->puts[0]['data']['UserInfo']['Valid']['enable']);
-        $this->assertSame('2026-08-01T00:00:00', $httpClient->puts[0]['data']['UserInfo']['Valid']['beginTime']);
-        $this->assertSame('2027-08-01T23:59:59', $httpClient->puts[0]['data']['UserInfo']['Valid']['endTime']);
+        $this->postJson('/api/sync-customer')->assertNotFound();
+        $this->patchJson('/api/sync-customer/M-LEGACY')->assertNotFound();
+        $this->deleteJson('/api/sync-customer/M-LEGACY')->assertNotFound();
     }
 
-    public function test_delete_customer_calls_hikvision_delete_endpoints(): void
+    private function dispatchCustomer(array $customer): array
     {
-        $httpClient = $this->fakeHikvisionHttpClient();
-
-        $response = $this->deleteJson('/api/sync-customer/M-1264-DELETE');
-
-        $response->assertOk()
-            ->assertJsonPath('data.xgym_entrance.status', 'success');
-
-        $this->assertCount(2, $httpClient->puts);
-        $this->assertStringContainsString('/ISAPI/AccessControl/CardInfo/Delete', $httpClient->puts[0]['uri']);
-        $this->assertStringContainsString('/ISAPI/AccessControl/UserInfo/Delete', $httpClient->puts[1]['uri']);
-        $this->assertSame(
-            'M-1264-DELETE',
-            $httpClient->puts[0]['data']['CardInfoDelCond']['EmployeeNoList'][0]['employeeNo']
+        return app(CustomerGateSyncDispatcher::class)->dispatch(
+            $customer['member_id'],
+            'customer.updated',
+            CloudCustomerData::fromArray($customer)
         );
-        $this->assertSame(
-            'M-1264-DELETE',
-            $httpClient->puts[1]['data']['UserInfoDelCond']['EmployeeNoList'][0]['employeeNo']
+    }
+
+    private function runGateJob(SyncCustomerToGateJob $job): void
+    {
+        $job->handle(
+            app(CloudCustomerClient::class),
+            app(CustomerGatePayloadBuilder::class),
+            app(CustomerGateSyncService::class),
+            app(CustomerGateSyncStatusStore::class)
         );
     }
 }

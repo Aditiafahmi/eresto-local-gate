@@ -44,11 +44,16 @@ class CloudWebhookTest extends TestCase
         Http::assertSent(fn ($request) => $request->method() === 'GET'
             && $request->url() === 'https://cloud.example.test/api/customers/M-123');
 
-        $this->assertCount(3, $httpClient->posts);
+        $this->assertCount(2, $httpClient->posts);
         $this->assertSame('M-123', $httpClient->posts[0]['data']['UserInfo']['employeeNo']);
         $this->assertSame('Webhook Customer', $httpClient->posts[0]['data']['UserInfo']['name']);
         $this->assertSame('CARD-M-123', $httpClient->posts[1]['data']['CardInfo']['cardNo']);
-        $this->assertSame('base64-webhook-face', $httpClient->posts[2]['data']['faceData']);
+        $this->assertCount(1, $httpClient->postMultiparts);
+        $this->assertStringContainsString('/ISAPI/Intelligent/FDLib/FaceDataRecord', $httpClient->postMultiparts[0]['uri']);
+
+        $faceRecord = json_decode($httpClient->postMultiparts[0]['multipart'][0]['contents'], true);
+        $this->assertSame('M-123', $faceRecord['FPID']);
+        $this->assertSame('base64-webhook-face', $httpClient->postMultiparts[0]['multipart'][1]['contents']);
     }
 
     public function test_cloud_webhook_deletes_customer_from_hikvision_without_fetching_cloud(): void

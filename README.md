@@ -204,8 +204,8 @@ Supported events:
 
 | Event | Behavior |
 | --- | --- |
-| `customer.created` | Fetch full customer data from Cloud API, then add/sync to gates. |
-| `customer.updated` | Fetch full customer data from Cloud API, then update/sync to gates. |
+| `customer.created` | Fetch full customer data from Cloud API, then idempotently sync to gates. |
+| `customer.updated` | Fetch full customer data from Cloud API, then idempotently sync to gates. |
 | `customer.deleted` | Delete customer from gates without fetching full Cloud data. |
 
 Example response:
@@ -277,6 +277,18 @@ Example response:
 
 The actual Hikvision push happens in the queue worker. In testing, `QUEUE_CONNECTION=sync` executes the job immediately.
 
+### Idempotent Sync Behavior
+
+Before writing customer data to a gate, the sync service searches the device first:
+
+| Data | If found | If not found |
+| --- | --- | --- |
+| Person/UserInfo | `PUT /ISAPI/AccessControl/UserInfo/Modify` | `POST /ISAPI/AccessControl/UserInfo/Record` |
+| CardInfo | `PUT /ISAPI/AccessControl/CardInfo/Modify` | `POST /ISAPI/AccessControl/CardInfo/Record` |
+| FaceDataRecord | `PUT /ISAPI/Intelligent/FDLib/FDModify` | `POST /ISAPI/Intelligent/FDLib/FaceDataRecord` |
+
+Face records use stable FPIDs so retake/replace can update existing face records instead of creating duplicates.
+
 ### Update Customer Access Period
 
 Used when Eresto Cloud needs to update an existing customer name or access validity period on every configured gate.
@@ -311,7 +323,7 @@ Accept: application/json
 
 This endpoint deletes Hikvision `CardInfo` first, then deletes `UserInfo`.
 
-Face cleanup depends on the Hikvision device behavior. The current upload flow links face data through `employeeNo`, and the package does not expose a safe delete-by-employeeNo face method.
+Face cleanup is intentionally not included in customer delete yet. Face records are keyed by FPID, so a safe delete/cleanup flow can be added later without using global face-library delete endpoints.
 
 ## Hikvision Endpoint Mapping
 
@@ -323,8 +335,11 @@ The service sends data to Hikvision through the `shaykhnazar/hikvision-isapi` pa
 | Customer/UserInfo update | `PUT /ISAPI/AccessControl/UserInfo/Modify` |
 | Customer/UserInfo delete | `PUT /ISAPI/AccessControl/UserInfo/Delete` |
 | CardInfo | `POST /ISAPI/AccessControl/CardInfo/Record` |
+| CardInfo update | `PUT /ISAPI/AccessControl/CardInfo/Modify` |
 | CardInfo delete | `PUT /ISAPI/AccessControl/CardInfo/Delete` |
-| Face image | `POST /ISAPI/Intelligent/FDLib/1/picture` |
+| Face search | `POST /ISAPI/Intelligent/FDLib/FDSearch` |
+| Face create | `POST /ISAPI/Intelligent/FDLib/FaceDataRecord` |
+| Face update/retake | `PUT /ISAPI/Intelligent/FDLib/FDModify` |
 
 Face data uses Hikvision FDLib `1` by default.
 
@@ -332,7 +347,14 @@ Face data uses Hikvision FDLib `1` by default.
 
 For POS-based face enrollment, Eresto Cloud may send one or more Base64 face images.
 
-If `face_images_base64` contains multiple images, this service uploads each image to the same customer `employeeNo/member_id`. Hikvision stores and uses the face data inside the device-local FDLib.
+Face records are stored with deterministic FPIDs:
+
+| Input count | FPID |
+| --- | --- |
+| Single image | `{member_id}` |
+| Multiple images | `{member_id}_1`, `{member_id}_2`, `{member_id}_3`, etc. |
+
+If a face FPID already exists, this service uses `FDModify` to replace it. If it does not exist, this service uses `FaceDataRecord` to create it.
 
 This service treats face enrollment as customer-level data, not image-level data. The important result is whether the customer has usable face data on the device.
 

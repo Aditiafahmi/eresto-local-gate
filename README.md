@@ -30,6 +30,9 @@ Eresto Cloud
 routes/web.php
   Local server webhook and sync-status route definitions.
 
+routes/mock/web.php
+  Development-only Cloud and Hikvision mock routes.
+
 app/Console/Commands/SyncCustomerDeltaCommand.php
   Fetches incremental Cloud changes, queues sync jobs, and advances the Redis cursor.
 
@@ -38,6 +41,12 @@ app/Http/Controllers/CloudWebhookController.php
 
 app/Http/Controllers/Api/HikvisionSyncStatusController.php
   Returns the latest per-device customer sync status.
+
+app/Http/Controllers/Mock/
+  Development-only Cloud API and Hikvision ISAPI mock controllers.
+
+app/Http/Middleware/Mock/
+  Simulates the Hikvision Digest authentication challenge.
 
 app/DTOs/CloudCustomerData.php
   Validates and normalizes the Cloud customer contract before queue fan-out.
@@ -69,11 +78,20 @@ app/Services/Hikvision/CustomerGateSyncDispatcher.php
 app/Services/Hikvision/CustomerGateSyncStatusStore.php
   Stores aggregate and per-device sync status with a configurable TTL.
 
+app/Services/Mock/
+  Persists mock Hikvision Person, Card, and Face state per gate.
+
 config/hikvision.php
   Hikvision device configuration.
 
+config/mock.php
+  Development-only Cloud fixtures and mock Hikvision server configuration.
+
 tests/Feature/HikvisionSyncCustomerTest.php
   Mocked feature tests for dispatcher, per-device jobs, status, card, and face sync behavior.
+
+tests/Feature/Mock/
+  Feature coverage for mock Cloud and Hikvision HTTP endpoints.
 ```
 
 ## Requirements
@@ -81,7 +99,7 @@ tests/Feature/HikvisionSyncCustomerTest.php
 - PHP 8.2+
 - Composer
 - Docker, if using Laravel Sail
-- Hikvision gate device with ISAPI enabled
+- Hikvision gate device with ISAPI enabled, or the included local mock devices
 
 ## Setup
 
@@ -115,6 +133,7 @@ Configure Hikvision devices in `.env`:
 
 ```env
 HIKVISION_DEFAULT_DEVICE=xgym_entrance
+HIKVISION_USE_MOCK_DEVICES=false
 HIKVISION_FORMAT=json
 HIKVISION_PROTOCOL=http
 HIKVISION_PORT=80
@@ -138,6 +157,58 @@ Current configured device keys:
 - `xgym_entrance`
 - `xgym_exit`
 
+### Local Mock Hikvision Devices
+
+Two local HTTP services can replace physical Hikvision gates during development. They implement the ISAPI operations used by this application, including Digest authentication, person and card writes, face multipart uploads, searches, updates, and customer deletion.
+
+Enable mock device targets in `.env`:
+
+```env
+APP_ENV=local
+COMPOSE_PROFILES=mock
+HIKVISION_USE_MOCK_DEVICES=true
+```
+
+Start the application and both mock gates:
+
+```bash
+docker compose --profile mock up -d
+```
+
+`COMPOSE_PROFILES=mock` makes the shorter `docker compose up -d` command behave the same way on a developer machine. Without the profile, Compose does not create or start either mock gate service.
+
+The application reaches the mock gates through Docker service names. Their host inspection endpoints are:
+
+```text
+xgym_entrance: http://localhost:8091/__mock/hikvision/state
+xgym_exit:     http://localhost:8092/__mock/hikvision/state
+```
+
+Inspect stored Person, Card, and Face metadata:
+
+```bash
+curl -s http://localhost:8091/__mock/hikvision/state | jq
+curl -s http://localhost:8092/__mock/hikvision/state | jq
+```
+
+Reset both mock gates:
+
+```bash
+curl -s -X DELETE http://localhost:8091/__mock/hikvision/state | jq
+curl -s -X DELETE http://localhost:8092/__mock/hikvision/state | jq
+```
+
+Persistent mock data is written per device under:
+
+```text
+storage/app/mock-hikvision/xgym_entrance/
+storage/app/mock-hikvision/xgym_exit/
+```
+
+Each directory contains `state.json` plus uploaded files under `faces/`. The sample `M123` Cloud fixture sends a small mock face payload so the multipart flow can be exercised. It is not a valid face photo. Replace `face_images_base64` in `config/mock.php` with a Base64-encoded JPEG when testing real image content.
+
+Mock device mode is ignored when `APP_ENV=production`. Mock routes live in `routes/mock/web.php`, are loaded only for `local/testing`, and retain controller-level `404` guards. The production application has no dependency on either mock container.
+
 ## Eresto Cloud Configuration
 
 Configure the Cloud API base URL and optional webhook secret in `.env`:
@@ -147,6 +218,7 @@ ERESTO_CLOUD_URL=https://cloud-api.example.com
 ERESTO_CLOUD_TOKEN=
 ERESTO_CLOUD_TIMEOUT=10
 ERESTO_CLOUD_WEBHOOK_SECRET=
+ERESTO_MOCK_CLOUD_ENABLED=false
 ERESTO_DELTA_SYNC_ENABLED=false
 ERESTO_DELTA_SYNC_STORE=redis
 ERESTO_DELTA_SYNC_CURSOR_KEY=eresto:customer-delta:last-cursor
@@ -162,6 +234,60 @@ X-Hub-Signature-256: sha256=<hmac>
 ```
 
 The HMAC is calculated from the raw request body using SHA-256 and the shared secret.
+
+### Local Mock Cloud API
+
+The local mock can exercise real HTTP calls from queue workers and Horizon without changing or running `eresto-backend-api`. It is available only in the `local` and `testing` environments and is disabled by default.
+
+Enable it in `.env`:
+
+```env
+APP_ENV=local
+ERESTO_MOCK_CLOUD_ENABLED=true
+ERESTO_CLOUD_URL=http://localhost/mock-cloud
+```
+
+When Laravel runs through Sail and `localhost` cannot be resolved from the worker, use the Sail service hostname:
+
+```env
+ERESTO_CLOUD_URL=http://laravel.test/mock-cloud
+```
+
+Clear cached configuration after changing `.env`:
+
+```bash
+php artisan optimize:clear
+```
+
+Available mock endpoints:
+
+```text
+GET  /mock-cloud/api/customers/M123
+GET  /mock-cloud/api/customers/M124
+GET  /mock-cloud/api/customers/delta
+POST /mock-cloud/api/customers/M123/enrol-face
+```
+
+Mock fixtures are defined under the `cloud` section of `config/mock.php`. They are static and do not write to a database. The face-enrolment endpoint acknowledges the request but does not persist its state.
+
+Test a customer response:
+
+```bash
+curl -s http://localhost/mock-cloud/api/customers/M123 \
+  -H 'Accept: application/json'
+```
+
+Then trigger the normal webhook flow:
+
+```bash
+curl -i http://localhost/cloud/webhook \
+  -X POST \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -d '{"event":"customer.updated","member_id":"M123"}'
+```
+
+The webhook continues through the normal dispatcher, Redis queue, Horizon, Cloud client, DTO validation, and per-gate jobs. Configure mock or reachable Hikvision devices before allowing the per-gate jobs to run.
 
 ## Queue Configuration
 

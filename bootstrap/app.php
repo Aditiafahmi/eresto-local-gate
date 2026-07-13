@@ -18,6 +18,9 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware) {
         $middleware->validateCsrfTokens(except: [
             'cloud/webhook',
+            'mock-cloud/api/customers/*/enrol-face',
+            'ISAPI/*',
+            '__mock/hikvision/*',
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {

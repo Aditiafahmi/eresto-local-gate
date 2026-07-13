@@ -64,6 +64,58 @@ services:
                 - ping
             retries: 3
             timeout: 5s
+    mock-hikvision-entrance:
+        profiles: ['mock']
+        image: 'sail-8.5/app'
+        entrypoint: php
+        command: artisan serve --host=0.0.0.0 --port=8080 --no-reload
+        user: '${WWWUSER:-1000}:${WWWGROUP:-1000}'
+        ports:
+            - '${FORWARD_MOCK_HIKVISION_ENTRANCE_PORT:-8091}:8080'
+        environment:
+            APP_ENV: local
+            APP_DEBUG: 'false'
+            APP_CONFIG_CACHE: /tmp/eresto-mock-hikvision-config.php
+            ERESTO_MOCK_HIKVISION_SERVER_ENABLED: 'true'
+            ERESTO_MOCK_HIKVISION_DEVICE_NAME: xgym_entrance
+            LOG_CHANNEL: stderr
+            SESSION_DRIVER: array
+            CACHE_STORE: array
+        volumes:
+            - '.:/var/www/html'
+        networks:
+            - sail
+        healthcheck:
+            test: ['CMD', 'curl', '--fail', 'http://localhost:8080/__mock/hikvision/state']
+            interval: 5s
+            timeout: 3s
+            retries: 5
+    mock-hikvision-exit:
+        profiles: ['mock']
+        image: 'sail-8.5/app'
+        entrypoint: php
+        command: artisan serve --host=0.0.0.0 --port=8080 --no-reload
+        user: '${WWWUSER:-1000}:${WWWGROUP:-1000}'
+        ports:
+            - '${FORWARD_MOCK_HIKVISION_EXIT_PORT:-8092}:8080'
+        environment:
+            APP_ENV: local
+            APP_DEBUG: 'false'
+            APP_CONFIG_CACHE: /tmp/eresto-mock-hikvision-config.php
+            ERESTO_MOCK_HIKVISION_SERVER_ENABLED: 'true'
+            ERESTO_MOCK_HIKVISION_DEVICE_NAME: xgym_exit
+            LOG_CHANNEL: stderr
+            SESSION_DRIVER: array
+            CACHE_STORE: array
+        volumes:
+            - '.:/var/www/html'
+        networks:
+            - sail
+        healthcheck:
+            test: ['CMD', 'curl', '--fail', 'http://localhost:8080/__mock/hikvision/state']
+            interval: 5s
+            timeout: 3s
+            retries: 5
 networks:
     sail:
         driver: bridge

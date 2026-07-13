@@ -10,3 +10,7 @@ Route::get('/', function () {
 
 Route::post('/cloud/webhook', CloudWebhookController::class);
 Route::get('/admin/status/{memberId}', HikvisionSyncStatusController::class);
+
+if (app()->environment(['local', 'testing'])) {
+    require __DIR__.'/mock/web.php';
+}

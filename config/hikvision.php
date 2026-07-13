@@ -1,5 +1,8 @@
 <?php
 
+$useMockDevices = env('APP_ENV', 'production') !== 'production'
+    && (bool) env('HIKVISION_USE_MOCK_DEVICES', false);
+
 return [
     /*
     |--------------------------------------------------------------------------
@@ -11,6 +14,8 @@ return [
     |
     */
     'default' => env('HIKVISION_DEFAULT_DEVICE', 'xgym_entrance'),
+
+    'mock_devices_enabled' => $useMockDevices,
 
     /*
     |--------------------------------------------------------------------------
@@ -26,20 +31,38 @@ return [
     */
     'devices' => [
         'xgym_entrance' => [
-            'ip' => env('HIKVISION_XGYM_ENTRANCE_IP', '192.168.1.101'),
-            'port' => env('HIKVISION_XGYM_ENTRANCE_PORT', env('HIKVISION_PORT', 80)),
+            'ip' => env(
+                'HIKVISION_XGYM_ENTRANCE_IP',
+                $useMockDevices ? 'mock-hikvision-entrance' : '192.168.1.101'
+            ),
+            'port' => env(
+                'HIKVISION_XGYM_ENTRANCE_PORT',
+                $useMockDevices ? 8080 : env('HIKVISION_PORT', 80)
+            ),
             'username' => env('HIKVISION_XGYM_ENTRANCE_USERNAME', env('HIKVISION_USERNAME', 'admin')),
-            'password' => env('HIKVISION_XGYM_ENTRANCE_PASSWORD', env('HIKVISION_PASSWORD')),
+            'password' => env(
+                'HIKVISION_XGYM_ENTRANCE_PASSWORD',
+                $useMockDevices ? 'mock-secret' : env('HIKVISION_PASSWORD')
+            ),
             'protocol' => env('HIKVISION_XGYM_ENTRANCE_PROTOCOL', env('HIKVISION_PROTOCOL', 'http')),
             'timeout' => env('HIKVISION_XGYM_ENTRANCE_TIMEOUT', env('HIKVISION_TIMEOUT', 30)),
             'verify_ssl' => env('HIKVISION_XGYM_ENTRANCE_VERIFY_SSL', env('HIKVISION_VERIFY_SSL', false)),
         ],
 
         'xgym_exit' => [
-            'ip' => env('HIKVISION_XGYM_EXIT_IP', '192.168.1.102'),
-            'port' => env('HIKVISION_XGYM_EXIT_PORT', env('HIKVISION_PORT', 80)),
+            'ip' => env(
+                'HIKVISION_XGYM_EXIT_IP',
+                $useMockDevices ? 'mock-hikvision-exit' : '192.168.1.102'
+            ),
+            'port' => env(
+                'HIKVISION_XGYM_EXIT_PORT',
+                $useMockDevices ? 8080 : env('HIKVISION_PORT', 80)
+            ),
             'username' => env('HIKVISION_XGYM_EXIT_USERNAME', env('HIKVISION_USERNAME', 'admin')),
-            'password' => env('HIKVISION_XGYM_EXIT_PASSWORD', env('HIKVISION_PASSWORD')),
+            'password' => env(
+                'HIKVISION_XGYM_EXIT_PASSWORD',
+                $useMockDevices ? 'mock-secret' : env('HIKVISION_PASSWORD')
+            ),
             'protocol' => env('HIKVISION_XGYM_EXIT_PROTOCOL', env('HIKVISION_PROTOCOL', 'http')),
             'timeout' => env('HIKVISION_XGYM_EXIT_TIMEOUT', env('HIKVISION_TIMEOUT', 30)),
             'verify_ssl' => env('HIKVISION_XGYM_EXIT_VERIFY_SSL', env('HIKVISION_VERIFY_SSL', false)),

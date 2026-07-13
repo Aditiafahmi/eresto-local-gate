@@ -1,0 +1,451 @@
+# Draft Design Architecture for Eresto Local Gate with Hikvision
+
+> Status: Draft — Target Architecture
+>
+> This document defines the target architecture, payload contracts, endpoints, and Hikvision ISAPI mappings. The implementation will be delivered in phases.
+
+## 1. Objective
+
+The local gate service will synchronize Eresto customer access data from Eresto Cloud to one or more Hikvision gate devices.
+
+The design will support:
+
+- Real-time customer synchronization through Cloud webhooks.
+- Periodic delta synchronization as a fallback for missed webhooks.
+- Idempotent Person, Card, and Face synchronization.
+- Independent queue jobs and retry per Hikvision device.
+- Per-customer and per-device sync status.
+- POS-based face enrollment in a later phase.
+
+## 2. Target Architecture
+
+```text
+Eresto Cloud
+  ├── POST webhook event to local server
+  └── expose customer and delta APIs
+              │
+              ▼
+Laravel Local Gate Server
+  ├── validate webhook / Cloud payload
+  ├── store cursor, locks, and status in Redis
+  ├── queue coordinator job
+  └── fan out one job per Hikvision device
+              │
+              ▼
+Hikvision Entrance / Exit Gates
+```
+
+Component responsibilities:
+
+| Component | Responsibility |
+| --- | --- |
+| Eresto Cloud | Source of truth for customer and membership access data. |
+| Local Laravel server | Orchestrates validation, queueing, retries, and device communication. |
+| Redis | Queue backend, Horizon data, sync status, delta cursor, and distributed locks. |
+| Hikvision devices | Device-local UserInfo, CardInfo, and FDLib storage. |
+
+## 3. Runtime Requirements
+
+- PHP `^8.2`.
+- Laravel `^11`.
+- `shaykhnazar/hikvision-isapi` `^1.5`.
+- Redis.
+- Laravel Horizon or a Redis queue worker.
+- Hikvision device with ISAPI enabled.
+
+Package setup:
+
+```bash
+composer require shaykhnazar/hikvision-isapi
+php artisan vendor:publish --tag=hikvision-config
+```
+
+## 4. Multi-Device Configuration
+
+```env
+HIKVISION_DEFAULT_DEVICE=xgym_entrance
+HIKVISION_FORMAT=json
+HIKVISION_PROTOCOL=http
+HIKVISION_PORT=80
+HIKVISION_USERNAME=admin
+HIKVISION_PASSWORD=***
+HIKVISION_TIMEOUT=30
+HIKVISION_VERIFY_SSL=false
+
+HIKVISION_XGYM_ENTRANCE_IP=192.168.1.101
+HIKVISION_XGYM_EXIT_IP=192.168.1.102
+```
+
+Each gate will have device-local data. Synchronizing Gate 1 will not guarantee that Gate 2 contains the same Person, Card, or Face record. The local server should therefore fan out synchronization to every configured gate.
+
+## 5. Endpoint Contracts
+
+### 5.1 Cloud API Endpoints Consumed by Local Server
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/api/customers/{member_id}` | Return the complete customer payload required for gate synchronization. |
+| `GET` | `/api/customers/delta?since={cursor}` | Return ordered customer changes after a cursor. |
+| `POST` | `/api/customers/{member_id}/enrol-face` | Confirm successful face enrollment in Cloud. |
+| `POST` | `/api/webhooks/subscribe` | Register the local webhook URL and shared secret. |
+
+### 5.2 Local Server Endpoints
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `POST` | `/cloud/webhook` | Receive `customer.created`, `customer.updated`, and `customer.deleted`. |
+| `GET` | `/admin/status/{member_id}` | Return aggregate and per-device sync status. |
+| `GET` | `/enrolment/start/{member_id}` | Start the planned POS face-enrollment flow. |
+| `POST` | `/enrolment/upload` | Validate and temporarily store face images before fan-out. |
+| `POST` | `/admin/sync` | Optional manual trigger for delta synchronization. |
+
+### 5.3 Internal Commands
+
+```bash
+php artisan sync:delta
+php artisan sync:delta --reset
+```
+
+## 6. Customer Payload Contract
+
+`GET /api/customers/{member_id}` should return either the customer object directly or inside `data`:
+
+```json
+{
+  "data": {
+    "member_id": "M-1260-VJIV",
+    "name": "Customer Name",
+    "start_date": "2026-07-07T00:00:00",
+    "end_date": "2026-12-31T23:59:59",
+    "status": "active",
+    "card_no": "CARD-M-1260-VJIV",
+    "face_images_base64": [
+      "base64-front",
+      "base64-left",
+      "base64-right"
+    ]
+  }
+}
+```
+
+Validation and mapping:
+
+| Cloud field | Rule | Hikvision mapping |
+| --- | --- | --- |
+| `member_id` | Required string. | `Person.employeeNo`; base identifier for Card and Face. |
+| `name` | Required string. | `Person.name`. |
+| `start_date` | Required valid date. | `Person.Valid.beginTime`. |
+| `end_date` | Required date, not before `start_date`. | `Person.Valid.endTime`. |
+| `status` | `active` or `inactive`; default `active`. | `Person.Valid.enable`. |
+| `card_no` | Optional string. | `Card.cardNo`; fallback to `member_id`. |
+| `face_images_base64` | Optional array of non-empty strings. | Face-image collection. |
+| `face_image_base64` | Optional single image string. | Fallback when plural face images are not supplied. |
+
+Unknown Cloud fields should be ignored by the local DTO.
+
+## 7. Card Credential Decision
+
+The package provides `Card.cardNo` and does not provide a separate QR DTO or `qrCode` property. The Cloud contract will therefore use `card_no`.
+
+```text
+Cloud card_no
+  -> Local Customer DTO
+  -> Card.cardNo
+  -> ISAPI CardInfo.cardNo
+```
+
+If a Hikvision QR reader treats decoded QR content as a card credential, Cloud may store that decoded value in `card_no`. The local contract should still not introduce a separate `qr_code` field unless Card and QR become two independent credentials.
+
+Reference package usage:
+
+```php
+use Shaykhnazar\HikvisionIsapi\DTOs\Card;
+
+$cardNo = $customer->cardNo ?: $customer->memberId;
+
+$card = new Card(
+    employeeNo: $person->employeeNo,
+    cardNo: $cardNo,
+    cardType: 'normal'
+);
+
+$cardService->add($card);
+```
+
+Expected Hikvision payload:
+
+```json
+{
+  "CardInfo": {
+    "employeeNo": "M-1260-VJIV",
+    "cardNo": "CARD-M-1260-VJIV",
+    "cardType": "normal"
+  }
+}
+```
+
+## 8. Webhook Flow
+
+Webhook payload:
+
+```json
+{
+  "event": "customer.updated",
+  "member_id": "M-1260-VJIV"
+}
+```
+
+Supported events:
+
+```text
+customer.created
+customer.updated
+customer.deleted
+```
+
+Create/update flow:
+
+```text
+Cloud customer change
+  -> Cloud sends webhook
+  -> Local verifies HMAC and validates event
+  -> Local initializes pending status per gate
+  -> Local queues coordinator
+  -> Coordinator GETs /api/customers/{member_id}
+  -> Local validates customer DTO
+  -> Coordinator creates one job per gate
+  -> Each gate job performs idempotent Person, Card, and Face sync
+```
+
+Delete flow:
+
+```text
+customer.deleted webhook
+  -> no customer fetch
+  -> one delete job per gate
+  -> delete CardInfo
+  -> delete UserInfo
+```
+
+Explicit face cleanup on delete must be confirmed with the deployed Hikvision device before implementation.
+
+## 9. Periodic Delta Flow
+
+Delta will act as a fallback if a webhook is missed or the local server is temporarily offline.
+
+Expected response:
+
+```json
+{
+  "data": [
+    {
+      "member_id": "M-1260-VJIV",
+      "event": "customer.updated",
+      "modified_at": "2026-07-10T10:00:00Z"
+    },
+    {
+      "member_id": "M-9999-DELETE",
+      "event": "customer.deleted",
+      "modified_at": "2026-07-10T10:01:00Z"
+    }
+  ],
+  "next_cursor": "104"
+}
+```
+
+Delta rules:
+
+- Cloud changes should be ordered by ascending change-log position.
+- Cloud should return no more than 500 changes in one response.
+- The last event for a repeated `member_id` should win within one response.
+- Local should save `next_cursor` only after all resulting jobs are queued.
+- Local should preserve the old cursor on request, validation, or enqueue failure.
+- A Redis distributed lock should prevent overlapping delta executions.
+- Delta should remain disabled until the Cloud change-log table and endpoint are ready.
+
+Recommended Cloud storage:
+
+```text
+customer_changes
+  id            bigint / monotonic change cursor
+  member_id     string
+  event         customer.created|updated|deleted
+  modified_at   UTC timestamp
+```
+
+Customer changes and the corresponding change-log row should be written in the same database transaction.
+
+## 10. Per-Device Job Model
+
+```text
+Coordinator
+  ├── SyncCustomerToGateJob: xgym_entrance
+  └── SyncCustomerToGateJob: xgym_exit
+```
+
+Each device job should have independent retry and status. A failure on the exit gate should not repeat a successful entrance-gate operation.
+
+Retry policy:
+
+```text
+Attempt 1 fails -> wait 10 seconds
+Attempt 2 fails -> wait 60 seconds
+Attempt 3 fails -> final failure
+```
+
+Status values:
+
+```text
+pending
+processing
+retrying
+success
+failed
+```
+
+## 11. Sync Order
+
+Required order inside each device job:
+
+1. Person / UserInfo.
+2. CardInfo.
+3. Face data, when supplied.
+
+Reason:
+
+- Card and face credentials depend on a customer identifier.
+- `employeeNo` will be mapped from `member_id`.
+- UserInfo should exist before dependent credentials are assigned.
+
+## 12. Person / UserInfo Mapping
+
+```php
+$person = new Person(
+    employeeNo: $customer->memberId,
+    name: $customer->name,
+    userType: UserType::NORMAL,
+    validEnabled: $customer->status === 'active',
+    beginTime: Carbon::parse($customer->startDate)->format('Y-m-d\TH:i:s'),
+    endTime: Carbon::parse($customer->endDate)->format('Y-m-d\TH:i:s'),
+    doorRight: '1',
+    rightPlan: [
+        ['doorNo' => 1, 'planTemplateNo' => '1'],
+    ]
+);
+```
+
+ISAPI operations:
+
+| Operation | Endpoint |
+| --- | --- |
+| Search | `POST /ISAPI/AccessControl/UserInfo/Search` |
+| Create | `POST /ISAPI/AccessControl/UserInfo/Record` |
+| Update | `PUT /ISAPI/AccessControl/UserInfo/Modify` |
+| Delete | `PUT /ISAPI/AccessControl/UserInfo/Delete` |
+
+The synchronization algorithm will search first, update when found, and create when missing.
+
+## 13. CardInfo Mapping
+
+| Operation | Endpoint |
+| --- | --- |
+| Search | `POST /ISAPI/AccessControl/CardInfo/Search` |
+| Create | `POST /ISAPI/AccessControl/CardInfo/Record` |
+| Update | `PUT /ISAPI/AccessControl/CardInfo/Modify` |
+| Delete | `PUT /ISAPI/AccessControl/CardInfo/Delete` |
+
+The Card `employeeNo` must match Person `employeeNo`.
+
+## 14. Face Data Mapping
+
+Input priority:
+
+1. `face_images_base64` when it contains one or more images.
+2. `face_image_base64` converted to a one-item collection.
+3. No face upload when both are empty.
+
+Face identifiers:
+
+```text
+FDID        = 1
+faceLibType = blackFD
+FPID        = member_id for one image
+FPID        = member_id_1, member_id_2, member_id_3 for multiple images
+```
+
+ISAPI operations:
+
+| Operation | Endpoint |
+| --- | --- |
+| Search | `POST /ISAPI/Intelligent/FDLib/FDSearch` |
+| Create | `POST /ISAPI/Intelligent/FDLib/FaceDataRecord` |
+| Update/retake | `PUT /ISAPI/Intelligent/FDLib/FDModify` |
+
+The implementation will use multipart `FaceDataRecord` and `FDModify`. The older `/ISAPI/Intelligent/FDLib/1/picture` helper flow will only be considered if required by the deployed device model.
+
+Face upload success will only mean that the device accepted the record. It will not prove that the face can be recognized reliably in real usage.
+
+## 15. POS Face Enrollment — Planned Phase
+
+```text
+POS captures front/left/right image candidates
+  -> validate image quality and pose
+  -> store selected image(s) temporarily with TTL
+  -> ensure UserInfo exists
+  -> queue upload per configured gate
+  -> upload to FDLib 1
+  -> confirm Cloud enrollment after required gates succeed
+  -> delete temporary images
+```
+
+Suggested Cloud fields:
+
+```json
+{
+  "member_id": "M-1260-VJIV",
+  "face_enrollment_status": "not_enrolled",
+  "face_enrolled_at": null,
+  "enrolled_device_id": null
+}
+```
+
+Suggested status values:
+
+```text
+not_enrolled
+enrolled
+verified
+failed
+needs_retake
+```
+
+Definitions:
+
+- `enrolled`: image upload succeeded on the required Hikvision device(s).
+- `verified`: a later gate event proves successful face recognition.
+- `failed`: capture, validation, queue, network, or device upload failed.
+- `needs_retake`: Cloud/system rules determine that the stored face is unreliable.
+
+## 16. Items to Confirm Before Implementation
+
+- Whether the deployed device supports multiple FPIDs/samples for one customer.
+- Whether a later upload replaces an earlier face sample.
+- Required JPEG dimensions, byte size, and image-quality limits.
+- Whether decoded QR reader values are accepted through `CardInfo.cardNo`.
+- Endpoint and event payload for successful face recognition.
+- Endpoint and event payload for failed face recognition.
+- Whether explicit face deletion is required before deleting UserInfo.
+- Whether Hikvision device-native multi-gate sync will be used.
+- Whether enrollment must succeed on all gates or only selected gates.
+- Cloud change-log retention and cursor-reset policy.
+
+## 17. Acceptance Criteria
+
+- Cloud and local payload names are consistent and use `card_no`, not `qr_code`.
+- Create/update/delete events are idempotent.
+- One gate failure does not block or repeat another successful gate.
+- Webhook and delta use the same dispatcher and job flow.
+- Invalid Cloud payloads never reach Hikvision.
+- Cursor never advances past a request or enqueue failure.
+- Status can be inspected per member and per device.
+- Face enrollment status distinguishes upload success from recognition success.

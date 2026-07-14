@@ -4,8 +4,6 @@ return [
     'cloud' => [
         'enabled' => env('ERESTO_MOCK_CLOUD_ENABLED', false),
 
-        'next_cursor' => 'mock-cursor-1',
-
         'customers' => [
             'M123' => [
                 'member_id' => 'M123',
@@ -26,19 +24,6 @@ return [
                 'status' => 'inactive',
                 'card_no' => null,
                 'face_images_base64' => [],
-            ],
-        ],
-
-        'changes' => [
-            [
-                'member_id' => 'M123',
-                'event' => 'customer.updated',
-                'modified_at' => '2026-07-13T10:00:00+07:00',
-            ],
-            [
-                'member_id' => 'M124',
-                'event' => 'customer.updated',
-                'modified_at' => '2026-07-13T10:01:00+07:00',
             ],
         ],
     ],

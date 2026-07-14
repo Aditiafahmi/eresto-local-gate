@@ -4,7 +4,6 @@ namespace App\Http\Controllers\Mock;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Http\Request;
 
 class CloudCustomerController extends Controller
 {
@@ -18,25 +17,6 @@ class CloudCustomerController extends Controller
         abort_unless(is_array($customer), 404, 'Mock customer not found.');
 
         return response()->json(['data' => $customer]);
-    }
-
-    public function delta(Request $request): JsonResponse
-    {
-        $this->ensureAvailable();
-
-        $validated = $request->validate([
-            'since' => ['nullable', 'string'],
-        ]);
-
-        $nextCursor = (string) config('mock.cloud.next_cursor', 'mock-cursor-1');
-        $changes = ($validated['since'] ?? null) === $nextCursor
-            ? []
-            : config('mock.cloud.changes', []);
-
-        return response()->json([
-            'data' => is_array($changes) ? array_values($changes) : [],
-            'next_cursor' => $nextCursor,
-        ]);
     }
 
     public function markFaceEnrolled(string $memberId): JsonResponse

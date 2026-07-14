@@ -6,7 +6,6 @@ use App\Http\Middleware\Mock\HikvisionDigestAuth;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('mock-cloud/api')->group(function () {
-    Route::get('/customers/delta', [CloudCustomerController::class, 'delta']);
     Route::get('/customers/{memberId}', [CloudCustomerController::class, 'show']);
     Route::post('/customers/{memberId}/enrol-face', [CloudCustomerController::class, 'markFaceEnrolled']);
 });

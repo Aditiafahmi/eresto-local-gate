@@ -28,22 +28,6 @@ class CloudApiTest extends TestCase
             ->assertNotFound();
     }
 
-    public function test_it_returns_delta_changes_then_an_empty_page_for_the_latest_cursor(): void
-    {
-        $initialResponse = $this->getJson('/mock-cloud/api/customers/delta')
-            ->assertOk()
-            ->assertJsonCount(2, 'data')
-            ->assertJsonPath('data.0.member_id', 'M123')
-            ->assertJsonPath('next_cursor', 'mock-cursor-1');
-
-        $cursor = $initialResponse->json('next_cursor');
-
-        $this->getJson('/mock-cloud/api/customers/delta?since='.$cursor)
-            ->assertOk()
-            ->assertJsonCount(0, 'data')
-            ->assertJsonPath('next_cursor', 'mock-cursor-1');
-    }
-
     public function test_it_accepts_a_mock_face_enrolment_confirmation(): void
     {
         $this->postJson('/mock-cloud/api/customers/M123/enrol-face')

@@ -33,9 +33,6 @@ routes/web.php
 routes/mock/web.php
   Development-only Cloud and Hikvision mock routes.
 
-app/Console/Commands/SyncCustomerDeltaCommand.php
-  Fetches incremental Cloud changes, queues sync jobs, and advances the Redis cursor.
-
 app/Http/Controllers/CloudWebhookController.php
   Receives cloud customer events, validates optional HMAC signature, and queues sync jobs.
 
@@ -51,9 +48,6 @@ app/Http/Middleware/Mock/
 app/DTOs/CloudCustomerData.php
   Validates and normalizes the Cloud customer contract before queue fan-out.
 
-app/DTOs/CloudCustomerDeltaData.php
-  Validates the Cloud delta response, change events, timestamps, and next cursor.
-
 app/Jobs/SyncCustomerToGatesJob.php
   Coordinator job that fetches customer data once and fans out one child job per device.
 
@@ -62,9 +56,6 @@ app/Jobs/SyncCustomerToGateJob.php
 
 app/Services/Cloud/CloudCustomerClient.php
   Fetches customer records from Eresto Cloud API.
-
-app/Services/Cloud/CustomerDeltaSyncStateStore.php
-  Stores the delta cursor and distributed lock in Redis.
 
 app/Services/Hikvision/CustomerGatePayloadBuilder.php
   Builds Hikvision Person, Card, and face image payload data.
@@ -219,11 +210,6 @@ ERESTO_CLOUD_TOKEN=
 ERESTO_CLOUD_TIMEOUT=10
 ERESTO_CLOUD_WEBHOOK_SECRET=
 ERESTO_MOCK_CLOUD_ENABLED=false
-ERESTO_DELTA_SYNC_ENABLED=false
-ERESTO_DELTA_SYNC_STORE=redis
-ERESTO_DELTA_SYNC_CURSOR_KEY=eresto:customer-delta:last-cursor
-ERESTO_DELTA_SYNC_LOCK_KEY=eresto:customer-delta:lock
-ERESTO_DELTA_SYNC_LOCK_SECONDS=1800
 ```
 
 If `ERESTO_CLOUD_WEBHOOK_SECRET` is set, incoming `/cloud/webhook` requests must include one of these headers:
@@ -264,7 +250,6 @@ Available mock endpoints:
 ```text
 GET  /mock-cloud/api/customers/M123
 GET  /mock-cloud/api/customers/M124
-GET  /mock-cloud/api/customers/delta
 POST /mock-cloud/api/customers/M123/enrol-face
 ```
 
@@ -394,62 +379,6 @@ Before fan-out, the response is converted into the local `CloudCustomerData` DTO
 
 An invalid Cloud response throws a validation exception. The coordinator job is retried according to its queue policy and is marked failed when all attempts are exhausted.
 
-### Periodic Delta Sync
-
-Delta sync is the fallback when a webhook is delayed or missed. Run it manually with:
-
-```bash
-php artisan sync:delta
-```
-
-The command reads the last cursor from Redis and requests:
-
-```http
-GET /api/customers/delta?since={cursor}
-```
-
-Expected Cloud response:
-
-```json
-{
-  "data": [
-    {
-      "member_id": "M-123",
-      "event": "customer.updated",
-      "modified_at": "2026-07-10T10:00:00Z"
-    },
-    {
-      "member_id": "M-456",
-      "event": "customer.deleted",
-      "modified_at": "2026-07-10T10:01:00Z"
-    }
-  ],
-  "next_cursor": "cursor-2026-07-10T10:01:00Z"
-}
-```
-
-The Cloud endpoint must return changes in ascending change-log order and at most 500 records per response. If one customer appears multiple times in the same response, local sync keeps only that customer's final event before dispatch. Each resulting change is sent through `CustomerGateSyncDispatcher`, so webhook and delta sync share the same per-gate jobs, idempotency, retry, and status flow. Deleted customers are queued with `customer.deleted` and are not fetched again from the Cloud customer endpoint.
-
-The cursor advances only after every change has been successfully queued. This treats the durable Redis queue as the handoff boundary: permanently failed jobs must be monitored and retried through Horizon or a later reconciliation process. If the Cloud request, validation, or dispatch fails before enqueue completes, the previous cursor is preserved and the changes are retried on the next execution. A 30-minute Redis lock prevents overlapping command executions.
-
-To ignore the saved cursor and request a full delta:
-
-```bash
-php artisan sync:delta --reset
-```
-
-Laravel schedules the command every five minutes. Delta sync is disabled by default and should only be enabled with `ERESTO_DELTA_SYNC_ENABLED=true` after the Cloud endpoint is deployed. For local Docker testing, run the scheduler in a separate terminal:
-
-```bash
-docker compose exec laravel.test php artisan schedule:work
-```
-
-On a non-Docker server, add the standard Laravel scheduler cron entry:
-
-```cron
-* * * * * cd /var/www/eresto-local-gate && php artisan schedule:run >> /dev/null 2>&1
-```
-
 ### Check Customer Sync Status
 
 The dispatcher records one status per gate. Status data uses the configured cache store (Redis by default) and expires after `HIKVISION_SYNC_STATUS_TTL` seconds.
@@ -542,12 +471,6 @@ With Docker/Sail:
 
 ```bash
 docker compose exec -T laravel.test php artisan test tests/Feature/HikvisionSyncCustomerTest.php
-```
-
-Run the delta command tests:
-
-```bash
-docker compose exec -T laravel.test php artisan test tests/Feature/SyncCustomerDeltaCommandTest.php
 ```
 
 The test uses a fake Hikvision HTTP client, so it does not require a real gate device.

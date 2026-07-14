@@ -2,13 +2,39 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\SyncCustomerToGatesJob;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Tests\Support\FakesHikvisionHttpClient;
 use Tests\TestCase;
 
 class CloudWebhookTest extends TestCase
 {
     use FakesHikvisionHttpClient;
+
+    public function test_cloud_webhook_accepts_customer_created_event(): void
+    {
+        $this->fakeHikvisionHttpClient();
+        Queue::fake();
+
+        config([
+            'services.eresto_cloud.webhook_secret' => null,
+        ]);
+
+        $this->postJson('/cloud/webhook', [
+            'event' => 'customer.created',
+            'member_id' => 'M-CREATE',
+        ])->assertStatus(202)
+            ->assertJsonPath('message', 'Webhook accepted')
+            ->assertJsonPath('event', 'customer.created')
+            ->assertJsonPath('member_id', 'M-CREATE');
+
+        Queue::assertPushed(
+            SyncCustomerToGatesJob::class,
+            fn (SyncCustomerToGatesJob $job) => in_array('event:customer.created', $job->tags(), true)
+                && in_array('customer:M-CREATE', $job->tags(), true)
+        );
+    }
 
     public function test_cloud_webhook_fetches_customer_from_cloud_and_syncs_to_hikvision(): void
     {

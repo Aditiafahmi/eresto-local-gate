@@ -134,7 +134,7 @@ Unknown Cloud fields should be ignored by the local DTO.
 
 ## 7. Card Credential Decision
 
-The package provides `Card.cardNo` and does not provide a separate QR DTO or `qrCode` property. The Cloud contract will therefore use `card_no`.
+The package provides `Card.cardNo`, so the Cloud contract will use `card_no`.
 
 ```text
 Cloud card_no
@@ -142,8 +142,6 @@ Cloud card_no
   -> Card.cardNo
   -> ISAPI CardInfo.cardNo
 ```
-
-If a Hikvision QR reader treats decoded QR content as a card credential, Cloud may store that decoded value in `card_no`. The local contract should still not introduce a separate `qr_code` field unless Card and QR become two independent credentials.
 
 Reference package usage:
 
@@ -356,35 +354,28 @@ Suggested status values:
 ```text
 not_enrolled
 enrolled
-verified
 failed
 needs_retake
+verified (optional, later phase)
 ```
 
 Definitions:
 
 - `enrolled`: image upload succeeded on the required Hikvision device(s).
-- `verified`: a later gate event proves successful face recognition.
+- `verified` (optional, later phase): a later gate event proves successful face recognition. This status requires event integration supported and validated against the deployed Hikvision device model.
 - `failed`: capture, validation, queue, network, or device upload failed.
 - `needs_retake`: Cloud/system rules determine that the stored face is unreliable.
 
+The initial enrollment scope ends at `enrolled`, followed by a manual physical recognition test on the deployed device. Automatic promotion to `verified` is not required for the initial phase.
+
 ## 15. Items to Confirm Before Implementation
 
-- Whether the deployed device supports multiple FPIDs/samples for one customer.
-- Whether a later upload replaces an earlier face sample.
-- Required JPEG dimensions, byte size, and image-quality limits.
-- Whether decoded QR reader values are accepted through `CardInfo.cardNo`.
-- Endpoint and event payload for successful face recognition.
-- Endpoint and event payload for failed face recognition.
-- Whether explicit face deletion is required before deleting UserInfo.
-- Whether Hikvision device-native multi-gate sync will be used.
-- Whether enrollment must succeed on all gates or only selected gates.
+- Face capabilities of the deployed device: multiple samples, replacement behavior, image limits, and deletion requirements.
+- Gate synchronization policy: device-native synchronization or local fan-out, and whether enrollment must succeed on all or selected gates.
+- For the optional verification phase, the endpoint and event payloads for successful and failed face recognition.
 
 ## 16. Acceptance Criteria
 
-- Cloud and local payload names are consistent and use `card_no`, not `qr_code`.
-- Create/update/delete events are idempotent.
-- One gate failure does not block or repeat another successful gate.
-- Invalid Cloud payloads never reach Hikvision.
-- Status can be inspected per member and per device.
-- Face enrollment status distinguishes upload success from recognition success.
+- Cloud and local payloads are consistent and validated before reaching Hikvision.
+- Create, update, and delete operations are idempotent per device; one gate failure does not repeat another successful gate.
+- Status is available per member and device, and distinguishes successful enrollment from optional recognition verification.
